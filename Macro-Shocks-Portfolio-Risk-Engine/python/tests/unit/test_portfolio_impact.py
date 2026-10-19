@@ -56,7 +56,7 @@ def make_score(composite: float, severity: SeverityLevel, action: str,
 
 
 def make_tree(event_id: str = "test-evt", include_tail: bool = False,
-              monday_gap: float = None) -> ScenarioTree:
+              monday_gap: float = None, tail_halt_probability: float = 0.08) -> ScenarioTree:
     scenarios = [
         ScenarioOutcome(
             name="Benign", description="In line", probability=0.40 if include_tail else 1.0,
@@ -74,7 +74,7 @@ def make_tree(event_id: str = "test-evt", include_tail: bool = False,
             yield_2y_change_bps=28.0, credit_hy_change_bps=220.0,
             dxy_change_pct=2.0, gold_change_pct=3.5, oil_change_pct=-4.0,
             is_tail_scenario=True, liquidity_impairment=0.75,
-            trading_halt_probability=0.08, forced_deleveraging_risk=0.65,
+            trading_halt_probability=tail_halt_probability, forced_deleveraging_risk=0.65,
         ))
     tree = ScenarioTree(
         event_id=event_id,
@@ -297,3 +297,19 @@ class TestPortfolioImpactTranslator:
         report = translator.generate(event, score, tree, market)
         # Notes should mention Monday gap
         assert "Monday" in report.notes or "gap" in report.notes.lower()
+
+    # ── Trading halt note ──────────────────────────────────────
+
+    def test_trading_halt_note_uses_probability_weighted_risk(self, translator, market):
+        score = make_score(75.0, SeverityLevel.CRITICAL, "HEDGE")
+        # 60% tail scenario x 30% conditional halt = 18% unconditional
+        tree = make_tree(include_tail=True, tail_halt_probability=0.30)
+        report = translator.generate(make_event(), score, tree, market)
+        assert "Estimated trading halt probability: 18%" in report.notes
+
+    def test_no_trading_halt_note_when_weighted_risk_is_low(self, translator, market):
+        score = make_score(75.0, SeverityLevel.CRITICAL, "HEDGE")
+        # 60% x 8% = 4.8%, below the 5% note threshold
+        tree = make_tree(include_tail=True, tail_halt_probability=0.08)
+        report = translator.generate(make_event(), score, tree, market)
+        assert "trading halt" not in report.notes.lower()

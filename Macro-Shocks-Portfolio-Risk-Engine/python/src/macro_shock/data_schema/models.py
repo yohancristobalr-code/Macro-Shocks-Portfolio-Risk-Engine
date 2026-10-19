@@ -454,6 +454,16 @@ class ScenarioTree(BaseModel):
                 raise ValueError(f"Scenario probabilities sum to {total:.3f}, expected ~1.0")
         return v
 
+    @property
+    def trading_halt_probability(self) -> float:
+        """
+        Unconditional probability of a trading halt.
+
+        Each scenario's trading_halt_probability is conditional on that scenario
+        occurring, so it is weighted by the scenario's own probability.
+        """
+        return sum(s.probability * s.trading_halt_probability for s in self.scenarios)
+
 
 # ---------------------------------------------------------------------------
 # Portfolio Impact Models

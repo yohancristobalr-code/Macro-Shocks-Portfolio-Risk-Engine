@@ -513,12 +513,10 @@ class PortfolioImpactTranslator:
             )
 
         if score.composite_score >= 65:
-            trading_halt_prob = max(
-                s.trading_halt_probability for s in tree.scenarios if s.is_tail_scenario
-            ) if tree.scenarios else 0
+            trading_halt_prob = tree.trading_halt_probability
             if trading_halt_prob > 0.05:
                 notes.append(
-                    f"Trading halt probability in tail scenario: {trading_halt_prob:.0%}. "
+                    f"Estimated trading halt probability: {trading_halt_prob:.0%}. "
                     f"Ensure liquidity in non-equity instruments (futures, ETFs, FX) for Monday hedging."
                 )
 
