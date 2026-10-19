@@ -49,10 +49,13 @@ def make_composite(score: float, severity: SeverityLevel, action: str) -> Compos
     )
 
 
-def make_scenario_tree(event_id: str, include_tail: bool = False) -> ScenarioTree:
+def make_scenario_tree(event_id: str, include_tail: bool = False,
+                       tail_probability: float = 0.40,
+                       tail_halt_probability: float = 0.12) -> ScenarioTree:
     scenarios = [
         ScenarioOutcome(
-            name="Benign", description="In line", probability=0.60 if include_tail else 1.0,
+            name="Benign", description="In line",
+            probability=1.0 - tail_probability if include_tail else 1.0,
             equity_impact_pct=-0.5, yield_10y_change_bps=3.0, vix_change=0.5,
             yield_2y_change_bps=4.0, credit_hy_change_bps=5.0,
             is_tail_scenario=False, liquidity_impairment=0.0,
@@ -61,11 +64,11 @@ def make_scenario_tree(event_id: str, include_tail: bool = False) -> ScenarioTre
     ]
     if include_tail:
         scenarios.append(ScenarioOutcome(
-            name="Disorderly Risk-Off", description="Tail", probability=0.40,
+            name="Disorderly Risk-Off", description="Tail", probability=tail_probability,
             equity_impact_pct=-8.0, yield_10y_change_bps=15.0, vix_change=18.0,
             yield_2y_change_bps=25.0, credit_hy_change_bps=200.0,
             is_tail_scenario=True, liquidity_impairment=0.7,
-            trading_halt_probability=0.12, forced_deleveraging_risk=0.6,
+            trading_halt_probability=tail_halt_probability, forced_deleveraging_risk=0.6,
         ))
     return ScenarioTree(
         event_id=event_id,
@@ -178,13 +181,38 @@ class TestAlertManager:
 
     def test_trading_halt_alert_generated(self, manager):
         score = make_composite(78.0, SeverityLevel.CRITICAL, "EMERGENCY_DERISKING")
-        tree = make_scenario_tree("evt-halt", include_tail=True)  # 12% halt prob
+        # 40% tail scenario x 30% conditional halt = 12% unconditional
+        tree = make_scenario_tree("evt-halt", include_tail=True, tail_halt_probability=0.30)
         event = make_event("evt-halt", is_weekend=True)
         portfolio = make_portfolio_impact("EMERGENCY_DERISKING")
 
         alerts = manager.evaluate_and_alert(event, score, tree, portfolio)
         halt_alerts = [a for a in alerts if "halt" in a.title.lower()]
-        assert len(halt_alerts) > 0
+        assert len(halt_alerts) == 1
+        assert halt_alerts[0].level == AlertLevel.CRITICAL
+        assert "12%" in halt_alerts[0].title
+
+    def test_trading_halt_alert_high_between_thresholds(self, manager):
+        score = make_composite(78.0, SeverityLevel.CRITICAL, "EMERGENCY_DERISKING")
+        # 40% x 20% = 8%: above HIGH (5%), below CRITICAL (10%)
+        tree = make_scenario_tree("evt-halt-high", include_tail=True, tail_halt_probability=0.20)
+        event = make_event("evt-halt-high", is_weekend=True)
+        portfolio = make_portfolio_impact("EMERGENCY_DERISKING")
+
+        alerts = manager.evaluate_and_alert(event, score, tree, portfolio)
+        halt_alerts = [a for a in alerts if "halt" in a.title.lower()]
+        assert [a.level for a in halt_alerts] == [AlertLevel.HIGH]
+
+    def test_unlikely_tail_with_high_conditional_halt_does_not_alert(self, manager):
+        score = make_composite(45.0, SeverityLevel.MEDIUM, "REDUCE")
+        # A 90% conditional halt in a 2%-likely scenario is a 1.8% halt risk overall
+        tree = make_scenario_tree("evt-halt-low", include_tail=True,
+                                  tail_probability=0.02, tail_halt_probability=0.90)
+        event = make_event("evt-halt-low", is_weekend=True)
+        portfolio = make_portfolio_impact("REDUCE")
+
+        alerts = manager.evaluate_and_alert(event, score, tree, portfolio)
+        assert not [a for a in alerts if "halt" in a.title.lower()]
 
     def test_alert_history_accumulates(self, manager):
         for i in range(3):

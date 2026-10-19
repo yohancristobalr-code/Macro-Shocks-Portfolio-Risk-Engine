@@ -486,19 +486,16 @@ class AlertManager:
 
         # Trading halt probability alert
         halt_thresholds = self.thresholds.get("trading_halt_probability", {})
-        max_halt_prob = max(
-            (s.trading_halt_probability for s in tree.scenarios if s.is_tail_scenario),
-            default=0.0,
-        )
+        halt_prob = tree.trading_halt_probability
         for level in [AlertLevel.CRITICAL, AlertLevel.HIGH]:
-            if level in halt_thresholds and max_halt_prob >= halt_thresholds[level]:
+            if level in halt_thresholds and halt_prob >= halt_thresholds[level]:
                 alerts.append(RiskAlert(
                     event_id=event.event_id,
                     score_id=score.score_id,
                     level=level,
-                    title=f"Trading Halt Risk: {max_halt_prob:.0%} probability in tail scenario",
+                    title=f"Trading Halt Risk: {halt_prob:.0%} estimated probability",
                     message=(
-                        f"Tail scenarios include {max_halt_prob:.0%} probability of trading halt. "
+                        f"Probability-weighted trading halt risk across scenarios is {halt_prob:.0%}. "
                         f"Ensure liquidity in non-equity instruments for Monday hedging. "
                         f"Pre-position in futures and FX which remain tradeable during equity halts."
                     ),
