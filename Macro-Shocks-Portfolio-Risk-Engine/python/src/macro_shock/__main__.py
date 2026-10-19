@@ -52,17 +52,50 @@ def _configure_logging(level: str = "INFO", fmt: str = "console") -> None:
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO))
 
 
-def _load_config(config_path: str | None, env: str) -> dict:
+def _deep_merge(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _read_yaml(p: Path) -> dict:
+    """Read a YAML config, recursively merging the file named by its `_base` key."""
     import yaml
+    with open(p) as f:
+        cfg = yaml.safe_load(f) or {}
+    base_name = cfg.pop("_base", None)
+    if base_name:
+        cfg = _deep_merge(_read_yaml(p.parent / base_name), cfg)
+    return cfg
+
+
+# Nested YAML keys the pipeline reads from the top level of its config dict.
+_FLATTENED_KEYS = {
+    ("pipeline", "fail_fast"): "fail_fast",
+    ("nlp", "use_transformer"): "use_transformer",
+    ("nlp", "transformer_model"): "transformer_model",
+    ("logging", "audit_log_dir"): "audit_log_dir",
+}
+
+
+def _load_config(config_path: str | None, env: str) -> dict:
     if config_path:
         p = Path(config_path)
     else:
         p = Path(__file__).parent.parent.parent / "configs" / f"{env}.yaml"
 
-    if p.exists():
-        with open(p) as f:
-            return yaml.safe_load(f) or {}
-    return {}
+    if not p.exists():
+        return {}
+    cfg = _read_yaml(p)
+    for (section, key), flat_key in _FLATTENED_KEYS.items():
+        value = cfg.get(section, {}).get(key)
+        if value is not None and flat_key not in cfg:
+            cfg[flat_key] = value
+    return cfg
 
 
 # ──────────────────────────────────────────────────────────────

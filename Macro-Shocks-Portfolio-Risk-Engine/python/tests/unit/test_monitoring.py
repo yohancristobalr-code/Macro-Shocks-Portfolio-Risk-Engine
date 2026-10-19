@@ -41,7 +41,7 @@ def make_composite(score: float, severity: SeverityLevel, action: str) -> Compos
         credit_spread_risk=make_sub_score("Credit Spread Risk", score * 0.8, w),
         fx_risk=make_sub_score("FX Risk", score * 0.6, w),
         commodity_shock_risk=make_sub_score("Commodity Shock Risk", score * 0.5, w),
-        weekend_gap_risk=make_sub_score("Weekend Gap Risk", score * 1.1 if score > 50 else 10, w),
+        weekend_gap_risk=make_sub_score("Weekend Gap Risk", min(score * 1.1, 100.0) if score > 50 else 10, w),
         policy_ambiguity_risk=make_sub_score("Policy Ambiguity Risk", score * 0.4, w),
         regime=RegimeType.FRAGILE_RISK_ON,
         recommended_action_level=action,
@@ -52,7 +52,7 @@ def make_composite(score: float, severity: SeverityLevel, action: str) -> Compos
 def make_scenario_tree(event_id: str, include_tail: bool = False) -> ScenarioTree:
     scenarios = [
         ScenarioOutcome(
-            name="Benign", description="In line", probability=0.60,
+            name="Benign", description="In line", probability=0.60 if include_tail else 1.0,
             equity_impact_pct=-0.5, yield_10y_change_bps=3.0, vix_change=0.5,
             yield_2y_change_bps=4.0, credit_hy_change_bps=5.0,
             is_tail_scenario=False, liquidity_impairment=0.0,

@@ -158,7 +158,7 @@ class TestBacktestEngineFiltering:
         events = [
             BacktestEvent(
                 event_id=f"E{i}", institution="Federal Reserve",
-                event_date=datetime(2024, 1, 1 + i * 10, tzinfo=timezone.utc),
+                event_date=datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(days=i * 10),
                 event_type=EventType.PRESS_CONFERENCE, is_weekend=False,
                 description="test",
             )

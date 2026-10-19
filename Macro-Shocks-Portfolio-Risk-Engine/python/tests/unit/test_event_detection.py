@@ -63,7 +63,8 @@ class TestMarketCalendar:
         assert calendar.is_holiday(xmas)
 
     def test_normal_weekday_is_trading_day(self, calendar):
-        assert calendar.is_trading_day(datetime(2024, 6, 19, 14, 30, tzinfo=timezone.utc))
+        # 2024-06-18 (Tuesday); 06-19 is Juneteenth, an NYSE holiday
+        assert calendar.is_trading_day(datetime(2024, 6, 18, 14, 30, tzinfo=timezone.utc))
 
     def test_next_market_open_from_saturday_is_monday(self, calendar):
         saturday = datetime(2024, 3, 9, 14, 0, tzinfo=timezone.utc)

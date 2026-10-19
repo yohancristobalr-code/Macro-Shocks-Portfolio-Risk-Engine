@@ -150,15 +150,11 @@ class MarketCalendar:
 
         # If it's during today's session and not yet closed, next open is tomorrow
         if self.is_trading_day(after):
-            close = self.market_close_time(candidate)
             open_today = self.market_open_time(candidate)
             if open_today and after < open_today:
                 return open_today  # Today's open is still in the future
-            # Markets closed for today; move to next trading day
-            if close and after >= close:
-                candidate += timedelta(days=1)
-        else:
-            candidate += timedelta(days=1)
+        # Today's open has passed (or today is not a trading day): look from tomorrow
+        candidate += timedelta(days=1)
 
         for _ in range(10):
             if candidate.weekday() < 5 and candidate not in self._holidays:
