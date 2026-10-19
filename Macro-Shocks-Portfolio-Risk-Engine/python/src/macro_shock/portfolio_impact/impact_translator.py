@@ -294,7 +294,7 @@ class PortfolioImpactTranslator:
         if comm_score >= 55:
             return (
                 f"COMMODITIES: Elevated commodity dislocation expected. "
-                f"Gold: {expected_gold:+.1f}% ({"flight-to-safety bid" if expected_gold > 0 else "risk-on selloff"}). "
+                f"Gold: {expected_gold:+.1f}% ({'flight-to-safety bid' if expected_gold > 0 else 'risk-on selloff'}). "
                 f"Oil: {expected_oil:+.1f}% (growth demand signal). "
                 f"Consider gold long as portfolio hedge in tail scenarios. "
                 f"Reduce cyclical commodity exposure (industrial metals, energy) if risk-off regime."

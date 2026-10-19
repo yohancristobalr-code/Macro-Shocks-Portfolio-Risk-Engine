@@ -59,7 +59,7 @@ def make_tree(event_id: str = "test-evt", include_tail: bool = False,
               monday_gap: float = None) -> ScenarioTree:
     scenarios = [
         ScenarioOutcome(
-            name="Benign", description="In line", probability=0.40,
+            name="Benign", description="In line", probability=0.40 if include_tail else 1.0,
             equity_impact_pct=-0.5, yield_10y_change_bps=3.0, vix_change=0.5,
             yield_2y_change_bps=4.0, credit_hy_change_bps=5.0,
             dxy_change_pct=0.1, gold_change_pct=-0.2, oil_change_pct=0.0,
