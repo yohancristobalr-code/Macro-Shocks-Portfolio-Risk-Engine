@@ -15,6 +15,7 @@ Commands:
 Examples:
   python -m macro_shock monitor --config configs/production.yaml
   python -m macro_shock analyze --event-file event.json
+  python -m macro_shock analyze --event-file event.json --data fred   # real FRED data
   python -m macro_shock backtest --start 2020-01-01 --end 2024-01-01
   python -m macro_shock serve --port 8000
   python -m macro_shock health --env production
@@ -166,17 +167,27 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     except Exception:
         event_time = datetime.now(timezone.utc)
 
-    market_state = MarketStateBuilder.build_synthetic(
-        as_of=event_time,
-        calendar=pipeline.calendar,
-        stress_level=args.stress,
-        seed=42,
-    )
+    if args.data == "fred":
+        from macro_shock.data.feed_provider import DataFeedError, FREDFeedProvider
+        try:
+            market_state = FREDFeedProvider(pipeline.calendar).get_snapshot(as_of=event_time)
+        except DataFeedError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+        data_source = "FRED, end-of-day"
+    else:
+        market_state = MarketStateBuilder.build_synthetic(
+            as_of=event_time,
+            calendar=pipeline.calendar,
+            stress_level=args.stress,
+            seed=42,
+        )
+        data_source = f"synthetic, stress={args.stress:.2f}"
 
     ctx = pipeline.process_raw_event(raw_event, market_state=market_state)
 
     # Print structured output
-    _print_risk_report(ctx)
+    _print_risk_report(ctx, data_source)
 
     if args.output:
         result = {}
@@ -190,7 +201,24 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         print(f"\nOutput written to: {args.output}")
 
 
-def _print_risk_report(ctx) -> None:
+def _fmt(value, spec: str) -> str:
+    return format(value, spec) if value is not None else "n/a"
+
+
+def _print_market_state(state, data_source: str) -> None:
+    yields, credit, vol, equity = state.yields, state.credit, state.volatility, state.equity
+    drawdown = equity.spx_from_52w_high * 100 if equity and equity.spx_from_52w_high is not None else None
+    print(f"\n  Market ({data_source}):")
+    print(f"    10Y: {_fmt(yields and yields.y10, '.2f')}%  "
+          f"| 2s10s: {_fmt(yields and yields.slope_2_10, '+.0f')}bps  "
+          f"| HY: {_fmt(credit and credit.hy_spread_bps, '.0f')}bps")
+    print(f"    VIX: {_fmt(vol and vol.vix_spot, '.1f')}  "
+          f"| SPX vs 52w high: {_fmt(drawdown, '+.1f')}%")
+    if state.gap_description:
+        print(f"    Note: {state.gap_description}")
+
+
+def _print_risk_report(ctx, data_source: str = "synthetic") -> None:
     """Print a concise risk report to stdout."""
     sep = "─" * 65
     print(f"\n{sep}")
@@ -204,6 +232,9 @@ def _print_risk_report(ctx) -> None:
         print(f"  Weekend:  {e.is_weekend}  |  Gap Corridor: {e.full_weekend_gap}")
         if e.hours_until_next_open:
             print(f"  Hours to open: {e.hours_until_next_open:.1f}h")
+
+    if ctx.market_state:
+        _print_market_state(ctx.market_state, data_source)
 
     if ctx.policy_surprise:
         ps = ctx.policy_surprise
@@ -390,7 +421,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_ana.add_argument("--speaker", default="")
     p_ana.add_argument("--speaker-role", default="")
     p_ana.add_argument("--text", default="", help="Prepared remarks / raw text")
-    p_ana.add_argument("--stress", type=float, default=0.35, help="Market stress level 0-1")
+    p_ana.add_argument("--data", choices=["synthetic", "fred"], default="synthetic",
+                       help="Market data source: synthetic (default) or fred (needs FRED_API_KEY)")
+    p_ana.add_argument("--stress", type=float, default=0.35,
+                       help="Market stress level 0-1 (synthetic data only)")
     p_ana.add_argument("--output", default=None, help="Write JSON output to file")
     p_ana.set_defaults(func=cmd_analyze)
 
@@ -425,6 +459,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    from dotenv import find_dotenv, load_dotenv
+    load_dotenv(find_dotenv(usecwd=True))  # e.g. FRED_API_KEY from a local .env file
+
     parser = build_parser()
     args = parser.parse_args()
     _configure_logging(args.log_level, args.log_format)

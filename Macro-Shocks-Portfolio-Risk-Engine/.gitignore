@@ -5,3 +5,6 @@ __pycache__/
 .coverage
 coverage_report/
 cpp/build/
+
+# Local secrets (FRED_API_KEY, ...)
+.env

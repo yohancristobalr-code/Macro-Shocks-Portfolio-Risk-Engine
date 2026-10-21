@@ -131,26 +131,38 @@ class SyntheticFeedProvider(DataFeedProvider):
 
 class FREDFeedProvider(DataFeedProvider):
     """
-    Fetches key yield curve and credit data from the St. Louis FRED API.
-    Free, public, but only provides EOD data for a subset of fields.
-    Suitable for research and monitoring yield dynamics.
-    NOT suitable for real-time equity or vol data.
+    Fetches end-of-day market data from the St. Louis FRED API.
 
-    Requires: FRED_API_KEY environment variable.
+    Covers every market input the risk scorer reads: the 2s10s curve, HY
+    spreads, VIX and the S&P 500 drawdown from its 52-week high. Liquidity,
+    breadth, FX and commodities are not available from FRED.
+
+    Only observations from sessions that closed before ``as_of`` are used:
+    for an event during the trading day, that day's close would already
+    contain the market's reaction to the event.
+
+    Requires: FRED_API_KEY environment variable (or api_key argument).
     Install:  pip install fredapi
     """
 
-    SERIES_MAP = {
-        "DGS2":   "yield_2y",
-        "DGS5":   "yield_5y",
-        "DGS10":  "yield_10y",
-        "DGS30":  "yield_30y",
-        "DFII10": "real_yield_10y",
-        "T10YIE": "breakeven_10y",
-        "BAMLH0A0HYM2": "hy_spread_bps_pct",   # % — convert to bps
-        "BAMLC0A0CM":   "ig_spread_bps_pct",
-        "TEDRATE":       "ted_spread_bps",
+    # Series values are in percent; spreads are converted to bps below.
+    YIELD_SERIES = {
+        "DGS2": "y2",
+        "DGS5": "y5",
+        "DGS10": "y10",
+        "DGS30": "y30",
+        "DFII10": "real_yield_10",
+        "T10YIE": "breakeven_10",
     }
+    SPREAD_SERIES = {
+        "BAMLH0A0HYM2": "hy_spread_bps",
+        "BAMLC0A0CM": "ig_spread_bps",
+    }
+    VIX_SERIES = "VIXCLS"
+    SPX_SERIES = "SP500"
+
+    MAX_STALENESS_DAYS = 7      # Older last observations are treated as missing
+    SPX_LOOKBACK_DAYS = 365     # Window for the 52-week high
 
     def __init__(self, calendar: MarketCalendar, api_key: Optional[str] = None):
         super().__init__(calendar)
@@ -159,70 +171,116 @@ class FREDFeedProvider(DataFeedProvider):
 
     def _get_fred(self):
         if self._fred is None:
+            if not self.api_key:
+                raise DataFeedError(
+                    "FRED_API_KEY is not set. Get a free key at "
+                    "https://fred.stlouisfed.org/docs/api/api_key.html"
+                )
             try:
                 from fredapi import Fred  # type: ignore
-                self._fred = Fred(api_key=self.api_key)
             except ImportError:
                 raise DataFeedError("fredapi not installed. Run: pip install fredapi")
+            self._fred = Fred(api_key=self.api_key)
         return self._fred
 
+    def _last_close_date(self, as_of: datetime):
+        """Date of the last session whose close is known at ``as_of``."""
+        from zoneinfo import ZoneInfo
+        et = as_of.astimezone(ZoneInfo("America/New_York"))
+        if (et.hour, et.minute) >= (16, 0):
+            return et.date()
+        return et.date() - timedelta(days=1)
+
+    def _fetch(self, series_id: str, start, cutoff):
+        """Valid observations of a series up to ``cutoff``, or None if unusable."""
+        try:
+            s = self._get_fred().get_series(
+                series_id, observation_start=str(start), observation_end=str(cutoff)
+            )
+        except DataFeedError:
+            raise
+        except Exception as e:
+            logger.warning("fred_series_failed", series=series_id, error=str(e))
+            self._errors.append(f"{series_id}: {e}")
+            return None
+        s = s.dropna()
+        if s.empty:
+            logger.warning("fred_series_empty", series=series_id, cutoff=str(cutoff))
+            return None
+        age_days = (cutoff - s.index[-1].date()).days
+        if age_days > self.MAX_STALENESS_DAYS:
+            logger.warning("fred_series_stale", series=series_id,
+                           last_observation=str(s.index[-1].date()), age_days=age_days)
+            return None
+        self._last_dates.append(s.index[-1].date())
+        return s
+
     def get_snapshot(self, as_of: Optional[datetime] = None) -> MarketStateSnapshot:
-        from macro_shock.data_schema.models import YieldCurveSnapshot, CreditMarketSnapshot, LiquiditySnapshot
-        import pandas as pd
-
-        as_of = as_of or datetime.now(timezone.utc)
-        fred = self._get_fred()
-
-        data: dict = {}
-        cutoff = as_of.date()
-
-        for series_id, field in self.SERIES_MAP.items():
-            try:
-                s = fred.get_series(series_id, observation_end=str(cutoff))
-                val = float(s.iloc[-1]) if len(s) > 0 else None
-                if val is not None and "_pct" in field:
-                    data[field.replace("_pct", "_bps")] = val * 100  # % -> bps
-                elif val is not None:
-                    data[field] = val
-            except Exception as e:
-                logger.warning("fred_series_failed", series=series_id, error=str(e))
-
-        as_of_utc = as_of.astimezone(timezone.utc)
-        session_state = MarketStateBuilder._get_session_state(as_of_utc, self.calendar)
-
-        yields = YieldCurveSnapshot(
-            timestamp=as_of_utc,
-            y2=data.get("yield_2y"),
-            y5=data.get("yield_5y"),
-            y10=data.get("yield_10y"),
-            y30=data.get("yield_30y"),
-            real_yield_10=data.get("real_yield_10y"),
-            breakeven_10=data.get("breakeven_10y"),
-        ) if data.get("yield_10y") else None
-
-        credit = CreditMarketSnapshot(
-            timestamp=as_of_utc,
-            hy_spread_bps=data.get("hy_spread_bps"),
-            ig_spread_bps=data.get("ig_spread_bps"),
-        ) if data.get("hy_spread_bps") else None
-
-        liquidity = LiquiditySnapshot(
-            timestamp=as_of_utc,
-            ted_spread_bps=data.get("ted_spread_bps"),
+        from macro_shock.data_schema.models import (
+            CreditMarketSnapshot, EquityMarketSnapshot, VolatilitySnapshot, YieldCurveSnapshot,
         )
 
-        n_fields = sum(1 for v in [yields, credit] if v is not None)
-        completeness = n_fields / 8.0  # partial data only
+        as_of = as_of or datetime.now(timezone.utc)
+        as_of_utc = as_of.astimezone(timezone.utc)
+        cutoff = self._last_close_date(as_of_utc)
+        recent_start = cutoff - timedelta(days=30)
+        self._errors = []
+        self._last_dates = []
+
+        def latest(series_id: str) -> Optional[float]:
+            s = self._fetch(series_id, recent_start, cutoff)
+            return float(s.iloc[-1]) if s is not None else None
+
+        y = {field: latest(sid) for sid, field in self.YIELD_SERIES.items()}
+        yields = YieldCurveSnapshot(timestamp=as_of_utc, **y) if y["y10"] is not None else None
+
+        spreads = {}
+        for sid, field in self.SPREAD_SERIES.items():
+            val = latest(sid)
+            spreads[field] = val * 100 if val is not None else None  # % -> bps
+        credit = (
+            CreditMarketSnapshot(timestamp=as_of_utc, **spreads)
+            if spreads["hy_spread_bps"] is not None else None
+        )
+
+        vix = latest(self.VIX_SERIES)
+        volatility = VolatilitySnapshot(timestamp=as_of_utc, vix_spot=vix) if vix is not None else None
+
+        equity = None
+        spx = self._fetch(self.SPX_SERIES, cutoff - timedelta(days=self.SPX_LOOKBACK_DAYS), cutoff)
+        if spx is not None:
+            level = float(spx.iloc[-1])
+            equity = EquityMarketSnapshot(
+                timestamp=as_of_utc,
+                spx_level=level,
+                spx_1d_return=float(level / spx.iloc[-2] - 1) if len(spx) > 1 else None,
+                spx_from_52w_high=float(level / spx.max() - 1),  # decimal, <= 0
+            )
+
+        # Same convention as MarketStateBuilder: 8 snapshot groups
+        n_available = sum(x is not None for x in (yields, credit, volatility, equity))
+        if n_available == 0:
+            detail = self._errors[0] if self._errors else "all series empty or stale"
+            raise DataFeedError(f"No usable data from FRED through {cutoff} ({detail})")
+        completeness = n_available / 8.0
+        has_gap = yields is None and volatility is None
+        data_through = max(self._last_dates)
+
+        logger.info("fred_snapshot_built", data_through=str(data_through), groups_available=n_available)
 
         return MarketStateSnapshot(
             timestamp=as_of_utc,
-            session_state=session_state,
+            session_state=MarketStateBuilder._get_session_state(as_of_utc, self.calendar),
             yields=yields,
             credit=credit,
-            liquidity=liquidity,
+            volatility=volatility,
+            equity=equity,
             data_completeness=completeness,
-            has_critical_data_gap=yields is None,
-            gap_description="FRED provides yields/credit only; equity, vol, FX unavailable" if completeness < 0.5 else None,
+            has_critical_data_gap=has_gap,
+            gap_description=(
+                f"FRED end-of-day data through {data_through}; "
+                "liquidity, breadth, FX and commodities unavailable"
+            ),
         )
 
 
