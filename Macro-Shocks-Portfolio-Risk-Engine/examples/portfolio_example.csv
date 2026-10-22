@@ -1,0 +1,17 @@
+# Example portfolio for: python -m macro_shock analyze ... --portfolio portfolio.csv
+# Copy this file to portfolio.csv (git-ignored) and replace the rows with your positions.
+#
+# name:        any label
+# type:        equity | bond | short_bond | high_yield | gold | oil | bitcoin | usd | cash
+# value:       market value in one currency; negative for short positions
+# sensitivity: optional. Beta for equity/gold/oil/bitcoin/usd (default 1),
+#              duration in years for bond (7), short_bond (2), high_yield (4)
+name,type,value,sensitivity
+S&P 500 ETF,equity,40000,
+Nasdaq 100 ETF,equity,15000,1.2
+10Y Treasury ETF,bond,20000,8
+High Yield ETF,high_yield,5000,
+Gold ETF,gold,5000,
+Bitcoin,bitcoin,10000,
+Ethereum,bitcoin,3000,1.3
+Cash,cash,2000,
