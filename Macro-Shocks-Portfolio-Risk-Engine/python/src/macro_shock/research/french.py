@@ -48,9 +48,9 @@ INDUSTRY_SECTORS = {
 
 # Long-short style factors
 STYLES = {
-    "SMB": "Small minus big caps",
-    "HML": "Value minus growth",
-    "Mom": "Momentum (winners minus losers)",
+    "SMB": "Small vs big caps",
+    "HML": "Value vs growth",
+    "Mom": "Momentum",
 }
 
 _MISSING = (-99.99, -999.0)

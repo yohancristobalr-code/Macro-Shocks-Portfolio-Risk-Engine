@@ -9,6 +9,7 @@ Commands:
   analyze     Analyze a single event from JSON or CLI flags
   backtest    Run historical event study backtest
   fomc-study  Bitcoin / S&P 500 / VIX reaction to FOMC announcements (FRED data)
+  sector-study Sectors and styles that did best in each market regime (French + FRED)
   serve       Start the REST API server
   health      Run system health check
   demo        Run a canned scenario demonstration
@@ -20,6 +21,7 @@ Examples:
   python -m macro_shock analyze --event-file event.json --portfolio portfolio.csv
   python -m macro_shock backtest --start 2020-01-01 --end 2024-01-01
   python -m macro_shock fomc-study --output fomc_events.csv   # Bitcoin vs FOMC (FRED)
+  python -m macro_shock sector-study                          # sectors by regime
   python -m macro_shock serve --port 8000
   python -m macro_shock health --env production
   python -m macro_shock demo --scenario weekend_crisis
@@ -200,6 +202,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
     # Print structured output
     _print_risk_report(ctx, data_source)
+    if args.sectors and ctx.risk_score:
+        _print_sector_suggestions(ctx.risk_score.regime.value, args.data)
     if portfolio is not None and ctx.scenario_tree:
         _print_portfolio_stress(portfolio, ctx.scenario_tree)
 
@@ -307,6 +311,77 @@ def _print_risk_report(ctx, data_source: str = "synthetic") -> None:
             print(f"    [{a.level.value}] {a.title}")
 
     print(sep + "\n")
+
+
+# ──────────────────────────────────────────────────────────────
+# Command: sector-study
+# ──────────────────────────────────────────────────────────────
+
+def _run_sector_study(start: str = "1990-01-01", horizon: int = 21):
+    from datetime import date
+
+    from macro_shock.data.feed_provider import DataFeedError, fred_client
+    from macro_shock.research import sector_study
+    from macro_shock.research.french import FrenchDataError
+
+    try:
+        return sector_study.run(fred_client(), date.fromisoformat(start), horizon)
+    except (DataFeedError, FrenchDataError) as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: could not build the sector study ({e}). A data source may be down; try again later.")
+        sys.exit(1)
+
+
+def _print_sector_suggestions(regime: str, data_source: str) -> None:
+    from macro_shock.research import sector_study
+
+    study = _run_sector_study()
+    sep = "─" * 72
+    print(f"  SECTORS AND STYLES IN THIS REGIME ({study.first_date.year}-{study.last_date.year} history)")
+    print(sep)
+    if data_source != "fred":
+        print("  Note: the regime above comes from synthetic market data; use --data fred for today's regime.")
+    for line in sector_study.regime_lines(study, regime):
+        print(line)
+    print(sector_study.FOOTNOTE)
+    print(sep + "\n")
+
+
+def cmd_sector_study(args: argparse.Namespace) -> None:
+    """Sectors and styles that historically did best after each market regime."""
+    import pandas as pd
+
+    from macro_shock.research import sector_study
+
+    study = _run_sector_study(args.start, args.horizon)
+    sep = "─" * 72
+    print(f"\n{sep}")
+    print("  SECTORS AND STYLES BY MARKET REGIME (French Data Library + FRED)")
+    print(sep)
+    print(f"  Period: {study.first_date} to {study.last_date}  |  window: {study.horizon} trading days, "
+          f"non-overlapping  |  windows: {int(study.regime_counts.sum())}")
+    print("  Regimes: " + "  ".join(f"{r} {n}" for r, n in study.regime_counts.items()))
+    pc = study.proxy_check
+    if pc["n"]:
+        print(f"  Credit proxy check: BAA10Y-based regime matches the ICE-based one on "
+              f"{pc['agreement']:.0%} of {pc['n']} dates since {pc['since']}")
+    for regime in study.regime_counts.index:
+        print()
+        for line in sector_study.regime_lines(study, regime):
+            print(line)
+
+    print(f"\n  CURRENT REGIME ({study.current_date}): {study.current_regime}"
+          + (f"  (BAA10Y proxy: {study.current_regime_proxy})"
+             if study.current_regime_proxy != study.current_regime else ""))
+    print(sector_study.FOOTNOTE)
+    print(sep + "\n")
+
+    if args.output:
+        out = pd.concat([study.sectors.assign(kind="sector"), study.styles.assign(kind="style")])
+        out.to_csv(args.output, index=False)
+        print(f"Table written to: {args.output}")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -553,6 +628,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ana.add_argument("--portfolio", default=None,
                        help="CSV of your positions (name,type,value[,sensitivity]) to stress-test; "
                             "see examples/portfolio_example.csv")
+    p_ana.add_argument("--sectors", action="store_true",
+                       help="Show sectors/styles that historically did best in the detected regime "
+                            "(downloads French Data Library + FRED history)")
     p_ana.add_argument("--stress", type=float, default=0.35,
                        help="Market stress level 0-1 (synthetic data only)")
     p_ana.add_argument("--output", default=None, help="Write JSON output to file")
@@ -572,6 +650,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="2Y yield move (bps) that counts as a hawkish/dovish surprise")
     p_fomc.add_argument("--output", default=None, help="Write the per-event table to a CSV file")
     p_fomc.set_defaults(func=cmd_fomc_study)
+
+    p_sec = sub.add_parser("sector-study", help="Sectors/styles by market regime (French Data Library + FRED)")
+    p_sec.add_argument("--start", default="1990-01-01", help="First date (VIX history starts 1990)")
+    p_sec.add_argument("--horizon", type=int, default=21, help="Window length in trading days (21 ~ 1 month)")
+    p_sec.add_argument("--output", default=None, help="Write the full regime table to a CSV file")
+    p_sec.set_defaults(func=cmd_sector_study)
 
     p_srv = sub.add_parser("serve", help="Start the REST API server")
     p_srv.add_argument("--host", default="0.0.0.0")
