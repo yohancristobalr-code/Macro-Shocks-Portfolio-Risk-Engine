@@ -40,7 +40,8 @@ def sector_label(code: str) -> str:
 
 
 def run(fred, start: date, horizon: int = 21, end: Optional[date] = None) -> SectorStudy:
-    industries = french.daily_returns(french.INDUSTRIES_12)
+    # "Other" is French's catch-all industry: no ETF tracks it, so it cannot be acted on
+    industries = french.daily_returns(french.INDUSTRIES_12).drop(columns=["Other"], errors="ignore")
     factors = french.daily_returns(french.FACTORS_3)
     momentum = french.daily_returns(french.MOMENTUM)
 
@@ -120,13 +121,15 @@ def supported_lines(study: SectorStudy, regime: str) -> list:
     """Only the robust and consistent results for ``regime``: what the evidence supports."""
     if regime not in set(study.sectors["regime"]):
         return _no_history(regime)
-    rows = []
+    picked = []
     for table, label in ((study.sectors, sector_label),
                          (study.styles, lambda a: french.STYLES.get(a, a))):
         t = table[(table["regime"] == regime) & table["evidence"].isin(["robust", "consistent"])]
-        for _, r in t.sort_values("mean_pct", ascending=False).iterrows():
-            side = "favoured" if r["mean_pct"] > 0 else "lagging "
-            rows.append(_fmt_row(f"{side} {label(r['asset'])}", r))
+        picked += [(r["mean_pct"], label(r["asset"]), r) for _, r in t.iterrows()]
+    favoured = sorted((p for p in picked if p[0] > 0), key=lambda p: -p[0])
+    lagging = sorted((p for p in picked if p[0] <= 0), key=lambda p: p[0])
+    rows = [_fmt_row(f"favoured {name}", r) for _, name, r in favoured]
+    rows += [_fmt_row(f"lagging  {name}", r) for _, name, r in lagging]
     n = int(study.regime_counts.get(regime, 0))
     head = f"  {regime}  (n={n} windows; halves split at {study.split_date})"
     if not rows:

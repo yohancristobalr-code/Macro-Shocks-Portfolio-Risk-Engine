@@ -11,4 +11,5 @@ cpp/build/
 
 # Personal data and outputs
 portfolio.csv
+portfolio_optimized.csv
 fomc_events.csv

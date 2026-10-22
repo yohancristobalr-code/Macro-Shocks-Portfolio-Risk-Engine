@@ -192,6 +192,26 @@ class TestSectorStudy:
         # The stressed spell sits in one half only, so nothing there can be robust
         assert "the evidence supports no tilt" in sector_study.supported_lines(study, "risk_off_correction")[-1]
 
+    def test_other_industry_is_left_out(self, patched_sources):
+        study = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
+        assert "Other" not in set(study.sectors["asset"])
+        assert len(set(study.sectors["asset"])) == 11
+
+    def test_supported_lines_list_favoured_before_lagging(self, patched_sources, monkeypatch):
+        study = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
+        rows = study.sectors[study.sectors["regime"] == "risk_on_expansion"].copy()
+        fake = pd.DataFrame([
+            {**rows.iloc[0].to_dict(), "asset": "Hlth", "mean_pct": -0.2, "evidence": "consistent"},
+            {**rows.iloc[0].to_dict(), "asset": "BusEq", "mean_pct": 0.5, "evidence": "robust"},
+            {**rows.iloc[0].to_dict(), "asset": "Utils", "mean_pct": -0.9, "evidence": "robust"},
+            {**rows.iloc[0].to_dict(), "asset": "Enrgy", "mean_pct": 0.1, "evidence": "consistent"},
+        ])
+        study.sectors = fake
+        study.styles = study.styles.iloc[0:0]
+        body = sector_study.supported_lines(study, "risk_on_expansion")[1:]
+        order = [next(n for n in ("Technology", "Energy", "Utilities", "Healthcare") if n in l) for l in body]
+        assert order == ["Technology", "Energy", "Utilities", "Healthcare"]
+
     def test_split_date_is_mid_sample(self, patched_sources):
         study = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
         assert date(2019, 6, 1) < study.split_date < date(2020, 1, 31)

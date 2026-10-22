@@ -15,6 +15,7 @@ YYYY (annual). Values are percent returns; -99.99 and -999 mark missing data.
 
 from __future__ import annotations
 
+import functools
 import io
 import re
 import urllib.request
@@ -60,8 +61,9 @@ class FrenchDataError(RuntimeError):
     """The French Data Library could not be downloaded or parsed."""
 
 
+@functools.lru_cache(maxsize=None)
 def download(dataset: str, timeout: float = 60.0) -> str:
-    """Download one dataset zip and return the CSV text inside it."""
+    """Download one dataset zip and return the CSV text inside it (cached for the process)."""
     url = f"{BASE_URL}{dataset}_CSV.zip"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
