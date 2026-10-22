@@ -379,6 +379,35 @@ class TestScenarioTreeBuilder:
 # Risk Scoring Tests
 # ---------------------------------------------------------------------------
 
+class TestEquityDrawdownComponent:
+
+    def _equity_score(self, risk_scorer, state, surprise, vulnerability_scorer, tree_builder, event):
+        from macro_shock.risk_scoring.composite_scorer import REGIME_WEIGHTS
+        from macro_shock.data_schema.models import RegimeType
+        vuln = vulnerability_scorer.score(state)
+        tree = tree_builder.build(event, surprise, vuln)
+        return risk_scorer._score_equity_downside(
+            surprise, state, vuln, tree, REGIME_WEIGHTS[RegimeType.UNKNOWN])
+
+    def test_drawdown_is_read_as_decimal(
+        self, risk_scorer, scenario_builder, vulnerability_scorer, normal_market_state,
+        hawkish_surprise_vector, weekend_event,
+    ):
+        def with_drawdown(dd):
+            equity = normal_market_state.equity.model_copy(update={"spx_from_52w_high": dd})
+            return normal_market_state.model_copy(update={"equity": equity})
+
+        args = (hawkish_surprise_vector, vulnerability_scorer, scenario_builder, weekend_event)
+        at_high = self._equity_score(risk_scorer, with_drawdown(0.0), *args)
+        down_10 = self._equity_score(risk_scorer, with_drawdown(-0.10), *args)
+        down_30 = self._equity_score(risk_scorer, with_drawdown(-0.30), *args)
+
+        # 10% below the high = half of the 25-point component; 20% or more = all of it
+        assert down_10.score - at_high.score == pytest.approx(12.5, abs=0.01)
+        assert down_30.score - at_high.score == pytest.approx(25.0, abs=0.01)
+        assert "SPX already -10.0% from 52-week high" in down_10.contributing_factors
+
+
 class TestCompositeRiskScorer:
     def _build_tree(self, scenario_builder, event, surprise, market_state, vulnerability_scorer):
         vuln = vulnerability_scorer.score(market_state)

@@ -163,7 +163,7 @@ class EquityMarketSnapshot(BaseModel):
     spx_1d_return: Optional[float] = None         # decimal
     spx_5d_return: Optional[float] = None
     spx_ytd_return: Optional[float] = None
-    spx_from_52w_high: Optional[float] = None     # drawdown, negative
+    spx_from_52w_high: Optional[float] = None     # drawdown, decimal, negative
     nasdaq_level: Optional[float] = None
     nasdaq_1d_return: Optional[float] = None
     russell_2000_level: Optional[float] = None
