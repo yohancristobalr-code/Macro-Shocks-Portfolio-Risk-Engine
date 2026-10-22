@@ -38,12 +38,14 @@ def sector_label(code: str) -> str:
     return f"{name} ({etf})" if etf != "-" else name
 
 
-def run(fred, start: date, horizon: int = 21) -> SectorStudy:
+def run(fred, start: date, horizon: int = 21, end: Optional[date] = None) -> SectorStudy:
     industries = french.daily_returns(french.INDUSTRIES_12)
     factors = french.daily_returns(french.FACTORS_3)
     momentum = french.daily_returns(french.MOMENTUM)
 
     idx = industries.index[industries.index >= pd.Timestamp(start)]
+    if end is not None:
+        idx = idx[idx <= pd.Timestamp(end)]
     market = french.market_return(factors)
     idx = idx.intersection(market.index).intersection(momentum.index)
 

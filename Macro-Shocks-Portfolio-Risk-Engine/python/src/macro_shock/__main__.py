@@ -317,7 +317,7 @@ def _print_risk_report(ctx, data_source: str = "synthetic") -> None:
 # Command: sector-study
 # ──────────────────────────────────────────────────────────────
 
-def _run_sector_study(start: str = "1990-01-01", horizon: int = 21):
+def _run_sector_study(start: str = "1990-01-01", horizon: int = 21, end: str | None = None):
     from datetime import date
 
     from macro_shock.data.feed_provider import DataFeedError, fred_client
@@ -325,7 +325,8 @@ def _run_sector_study(start: str = "1990-01-01", horizon: int = 21):
     from macro_shock.research.french import FrenchDataError
 
     try:
-        return sector_study.run(fred_client(), date.fromisoformat(start), horizon)
+        return sector_study.run(fred_client(), date.fromisoformat(start), horizon,
+                                date.fromisoformat(end) if end else None)
     except (DataFeedError, FrenchDataError) as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -355,7 +356,7 @@ def cmd_sector_study(args: argparse.Namespace) -> None:
 
     from macro_shock.research import sector_study
 
-    study = _run_sector_study(args.start, args.horizon)
+    study = _run_sector_study(args.start, args.horizon, args.end)
     sep = "─" * 72
     print(f"\n{sep}")
     print("  SECTORS AND STYLES BY MARKET REGIME (French Data Library + FRED)")
@@ -367,6 +368,11 @@ def cmd_sector_study(args: argparse.Namespace) -> None:
     if pc["n"]:
         print(f"  Credit proxy check: BAA10Y-based regime matches the ICE-based one on "
               f"{pc['agreement']:.0%} of {pc['n']} dates since {pc['since']}")
+        m = pc["matrix"]
+        cols = list(m.columns)
+        print(f"    {'real (rows) vs proxy (cols)':<26}" + "".join(f"{c:>21}" for c in cols))
+        for regime, row in m.iterrows():
+            print(f"    {regime:<26}" + "".join(f"{int(row[c]):>21}" for c in cols))
     for regime in study.regime_counts.index:
         print()
         for line in sector_study.regime_lines(study, regime):
@@ -653,6 +659,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_sec = sub.add_parser("sector-study", help="Sectors/styles by market regime (French Data Library + FRED)")
     p_sec.add_argument("--start", default="1990-01-01", help="First date (VIX history starts 1990)")
+    p_sec.add_argument("--end", default=None, help="Last date (YYYY-MM-DD); default: latest data")
     p_sec.add_argument("--horizon", type=int, default=21, help="Window length in trading days (21 ~ 1 month)")
     p_sec.add_argument("--output", default=None, help="Write the full regime table to a CSV file")
     p_sec.set_defaults(func=cmd_sector_study)
@@ -680,9 +687,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
+# Folder holding pyproject.toml: python/src/macro_shock/__main__.py -> parents[3]
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_env() -> None:
+    """
+    Load a .env file (e.g. FRED_API_KEY): the first one found from the current
+    folder upwards, else the project's own. Variables already set win.
+    """
     from dotenv import find_dotenv, load_dotenv
-    load_dotenv(find_dotenv(usecwd=True))  # e.g. FRED_API_KEY from a local .env file
+    found = find_dotenv(usecwd=True)
+    load_dotenv(found if found else _PROJECT_ROOT / ".env")
+
+
+def main() -> None:
+    _load_env()
 
     parser = build_parser()
     args = parser.parse_args()

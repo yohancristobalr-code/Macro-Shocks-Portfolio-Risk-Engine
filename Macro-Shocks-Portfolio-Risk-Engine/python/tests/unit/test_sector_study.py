@@ -119,6 +119,14 @@ class TestRegimeHistory:
         check = rh.credit_proxy_agreement(self._series(ice_matches_proxy=True))
         assert check["agreement"] == pytest.approx(1.0)
 
+    def test_agreement_matrix_cross_tabulates_real_vs_proxy(self):
+        check = rh.credit_proxy_agreement(self._series())
+        m = check["matrix"]
+        assert m.index.name == "real" and m.columns.name == "proxy"
+        assert int(m.to_numpy().sum()) == check["n"]
+        diagonal = sum(m.loc[r, r] for r in m.index if r in m.columns)
+        assert diagonal / check["n"] == pytest.approx(check["agreement"])
+
 
 def french_csv(columns, days, values) -> str:
     rows = [",".join([d.strftime("%Y%m%d")] + [f"{v:.4f}" for v in row]) for d, row in zip(days, values)]
@@ -174,6 +182,13 @@ class TestSectorStudy:
         assert "+ Utilities (XLU)" in lines[2] and lines[2].endswith(" *")
         assert any("Value vs growth" in l for l in lines)
 
+    def test_end_date_limits_the_sample(self, patched_sources):
+        full = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
+        half = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10, end=date(2019, 12, 31))
+        assert half.last_date <= date(2019, 12, 31) < full.last_date
+        assert half.regime_counts.sum() < full.regime_counts.sum()
+        assert half.current_regime == full.current_regime        # today's regime is unaffected
+
     def test_regime_without_history_is_explained(self, patched_sources):
         study = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
         assert "cannot identify it" in sector_study.regime_lines(study, "crisis")[0]
@@ -191,6 +206,7 @@ class TestSectorCommands:
         out = capsys.readouterr().out
         assert "SECTORS AND STYLES BY MARKET REGIME" in out
         assert "Credit proxy check: BAA10Y-based regime matches the ICE-based one on" in out
+        assert "real (rows) vs proxy (cols)" in out
         assert "CURRENT REGIME (2024-06-28): risk_on_expansion" in out
         assert set(pd.read_csv(out_csv)["kind"]) == {"sector", "style"}
 

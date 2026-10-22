@@ -305,6 +305,7 @@ class TestFomcStudyCommand:
     def test_missing_api_key_exits_with_clear_error(self, monkeypatch, capsys, tmp_path):
         from macro_shock import __main__ as cli
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "_PROJECT_ROOT", tmp_path)
         monkeypatch.delenv("FRED_API_KEY", raising=False)
         monkeypatch.setattr(sys, "argv", ["msre", "fomc-study"])
         with pytest.raises(SystemExit) as exc:
