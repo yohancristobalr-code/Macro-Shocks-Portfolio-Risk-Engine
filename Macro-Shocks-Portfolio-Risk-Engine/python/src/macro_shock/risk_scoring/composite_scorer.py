@@ -449,7 +449,8 @@ class CompositeRiskScorer:
 
         # Component 3: Equity vulnerability (pre-event drawdown) (0-25)
         if state.equity and state.equity.spx_from_52w_high is not None:
-            drawdown = abs(min(state.equity.spx_from_52w_high, 0))
+            # spx_from_52w_high is a decimal (-0.05 = 5% below the high)
+            drawdown = abs(min(state.equity.spx_from_52w_high, 0)) * 100
             drawdown_score = min(drawdown / 20.0 * 25.0, 25.0)
             components.append(drawdown_score)
             if drawdown > 5:
