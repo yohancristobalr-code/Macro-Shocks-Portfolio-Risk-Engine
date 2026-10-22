@@ -21,13 +21,14 @@ from macro_shock.research import sector_regimes as sr
 
 @dataclass
 class SectorStudy:
-    sectors: pd.DataFrame           # regime_performance() rows, sectors in excess of the market
-    styles: pd.DataFrame            # regime_performance() rows, long-short styles
+    sectors: pd.DataFrame           # split_robustness() rows, sectors in excess of the market
+    styles: pd.DataFrame            # split_robustness() rows, long-short styles
     regime_counts: pd.Series
     first_date: date
     last_date: date
     horizon: int
     proxy_check: Dict[str, float]
+    split_date: date                       # halves for the robustness grade
     current_regime: Optional[str]          # latest date, real ICE credit spreads
     current_regime_proxy: Optional[str]    # latest date, BAA10Y proxy
     current_date: Optional[date]
@@ -51,10 +52,13 @@ def run(fred, start: date, horizon: int = 21, end: Optional[date] = None) -> Sec
 
     series = rh.fetch_series(fred, start, date.today())
     regimes = rh.regime_history(series, sr.window_starts(idx, horizon), "proxy")
+    split = idx[len(idx) // 2]
 
-    sectors = sr.regime_performance(industries.loc[idx], regimes, market, horizon)
+    fwd, labels = sr.window_returns(industries.loc[idx], regimes, market, horizon)
+    sectors = sr.split_robustness(fwd, labels, split)
     style_daily = pd.concat([factors.loc[idx, ["SMB", "HML"]], momentum.loc[idx, ["Mom"]]], axis=1)
-    styles = sr.regime_performance(style_daily, regimes, None, horizon)
+    fwd, labels = sr.window_returns(style_daily, regimes, None, horizon)
+    styles = sr.split_robustness(fwd, labels, split)
 
     latest = max(s.index[-1] for k, s in series.items() if k != "baa")
     now_real = rh.regime_history(series, [latest], "ice").iloc[0]
@@ -65,37 +69,74 @@ def run(fred, start: date, horizon: int = 21, end: Optional[date] = None) -> Sec
         sectors=sectors, styles=styles, regime_counts=counts,
         first_date=idx[0].date(), last_date=idx[-1].date(), horizon=horizon,
         proxy_check=rh.credit_proxy_agreement(series),
+        split_date=split.date(),
         current_regime=now_real, current_regime_proxy=now_proxy, current_date=latest.date(),
     )
 
 
+MARKERS = {"robust": "**", "consistent": "*", "unstable": "!", "": ""}
+
+
+def _halves(r) -> str:
+    if np.isnan(r.get("mean_pct_h1", np.nan)) or np.isnan(r.get("mean_pct_h2", np.nan)):
+        return ""
+    return f"  halves {r['mean_pct_h1']:+.2f} / {r['mean_pct_h2']:+.2f}"
+
+
 def _fmt_row(label: str, r) -> str:
     if np.isnan(r["ci_low"]):
-        interval, star = "  (too few windows)", ""
+        interval = "  (too few windows)"
     else:
         interval = f"  [{r['ci_low']:+.2f} to {r['ci_high']:+.2f}]"
-        star = " *" if (r["ci_low"] > 0 or r["ci_high"] < 0) else ""
-    return f"    {label:<28} {r['mean_pct']:>+6.2f}%   {r['hit_rate']:>4.0%}{interval}{star}"
+    mark = MARKERS.get(r.get("evidence", ""), "")
+    return (f"    {mark:<2} {label:<28} {r['mean_pct']:>+6.2f}%   {r['hit_rate']:>4.0%}"
+            f"{interval}{_halves(r)}")
+
+
+def _no_history(regime: str) -> list:
+    return [f"  No historical windows for regime '{regime}'. With FRED inputs the engine "
+            f"cannot identify it (crisis needs liquidity data), so there is nothing to compare."]
 
 
 def regime_lines(study: SectorStudy, regime: str, top: int = 3) -> list:
-    """Printable best/worst sectors and the styles for one regime."""
+    """Printable best/worst sectors and the styles for one regime, with evidence markers."""
     if regime not in set(study.sectors["regime"]):
-        return [f"  No historical windows for regime '{regime}'. With FRED inputs the engine "
-                f"cannot identify it (crisis needs liquidity data), so there is nothing to compare."]
+        return _no_history(regime)
     n = int(study.regime_counts.get(regime, 0))
     lines = [f"  {regime}  (n={n} windows of {study.horizon} trading days)",
-             f"    {'Sector vs market, next window':<28} {'mean':>7}   {'beat':>4}  95% interval"]
+             f"       {'Sector vs market, next window':<28} {'mean':>7}   {'beat':>4}  95% interval"]
     picks = sr.suggestions(study.sectors, regime, top)
     for _, r in picks["best"].iterrows():
         lines.append(_fmt_row("+ " + sector_label(r["asset"]), r))
     for _, r in picks["worst"].iterrows():
         lines.append(_fmt_row("- " + sector_label(r["asset"]), r))
-    lines.append(f"    {'Style (long-short)':<28}")
+    lines.append(f"       {'Style (long-short)':<28}")
     for _, r in study.styles[study.styles["regime"] == regime].iterrows():
         lines.append(_fmt_row(french.STYLES.get(r["asset"], r["asset"]), r))
     return lines
 
 
-FOOTNOTE = ("  * = 95% interval excludes zero. Historical association, not a forecast; "
-            "'beat' = share of windows with a positive result.")
+def supported_lines(study: SectorStudy, regime: str) -> list:
+    """Only the robust and consistent results for ``regime``: what the evidence supports."""
+    if regime not in set(study.sectors["regime"]):
+        return _no_history(regime)
+    rows = []
+    for table, label in ((study.sectors, sector_label),
+                         (study.styles, lambda a: french.STYLES.get(a, a))):
+        t = table[(table["regime"] == regime) & table["evidence"].isin(["robust", "consistent"])]
+        for _, r in t.sort_values("mean_pct", ascending=False).iterrows():
+            side = "favoured" if r["mean_pct"] > 0 else "lagging "
+            rows.append(_fmt_row(f"{side} {label(r['asset'])}", r))
+    n = int(study.regime_counts.get(regime, 0))
+    head = f"  {regime}  (n={n} windows; halves split at {study.split_date})"
+    if not rows:
+        return [head, "    No sector or style held up in both halves of the history for this regime:",
+                "    the evidence supports no tilt."]
+    return [head] + rows
+
+
+FOOTNOTE = ("  ** robust: clear in the full sample and in each half  |  * consistent: clear overall, "
+            "same sign in both halves\n"
+            "  ! unstable: clear overall but the halves disagree - ignore  |  halves = mean in "
+            "each half of the period\n"
+            "  Historical association, not a forecast; 'beat' = share of windows with a positive result.")
