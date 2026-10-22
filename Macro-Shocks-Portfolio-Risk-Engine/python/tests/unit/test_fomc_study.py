@@ -136,6 +136,54 @@ class TestSummaryAndBaseline:
         assert base["corr_btc_vs_surprise"] < -0.9
 
 
+class TestBeta:
+
+    def test_recovers_known_slope_with_interval(self):
+        rng = np.random.default_rng(1)
+        x = pd.Series(rng.normal(0, 1, 200))
+        y = 1.5 * x + pd.Series(rng.normal(0, 0.5, 200))
+        b = fs.beta(x, y)
+        assert b["beta"] == pytest.approx(1.5, abs=0.1)
+        assert b["ci_low"] < 1.5 < b["ci_high"]
+        assert b["ci_high"] - b["ci_low"] < 0.4
+        assert b["n"] == 200
+
+    def test_noisy_small_sample_has_wide_interval_including_zero(self):
+        rng = np.random.default_rng(2)
+        x = pd.Series(rng.normal(0, 1, 12))
+        y = pd.Series(rng.normal(0, 4, 12))          # unrelated to x
+        b = fs.beta(x, y)
+        assert b["ci_low"] < 0 < b["ci_high"]
+
+    def test_is_reproducible(self):
+        rng = np.random.default_rng(3)
+        x = pd.Series(rng.normal(0, 1, 50)); y = 2 * x + pd.Series(rng.normal(0, 1, 50))
+        assert fs.beta(x, y) == fs.beta(x, y)
+
+    def test_skips_missing_values_and_handles_tiny_samples(self):
+        x = pd.Series([1.0, np.nan, 2.0, 3.0, np.nan])
+        y = pd.Series([2.0, 5.0, np.nan, 6.0, 1.0])
+        b = fs.beta(x, y)
+        assert b["n"] == 2 and np.isnan(b["beta"])
+
+    def test_event_beta_uses_spx_and_btc_columns(self):
+        events = pd.DataFrame({"spx_pct": [-2.0, -1.0, 0.0, 1.0, 2.0, 0.5],
+                               "btc_pct": [-4.0, -2.0, 0.0, 2.0, 4.0, 1.0]})
+        assert fs.event_beta(events)["beta"] == pytest.approx(2.0)
+
+    def test_window_beta_uses_non_overlapping_two_session_moves(self):
+        bdays = pd.bdate_range("2023-01-02", "2024-12-31")
+        days = pd.date_range("2023-01-01", "2024-12-31")
+        rng = np.random.default_rng(4)
+        spx_log = np.cumsum(rng.normal(0, 0.01, len(bdays)))
+        spx = pd.Series(4000 * np.exp(spx_log), index=bdays)
+        # Bitcoin = 1.5x the S&P 500 log path on trading days, flat on weekends
+        btc = pd.Series(30000 * np.exp(1.5 * spx_log), index=bdays).reindex(days, method="ffill").bfill()
+        b = fs.window_beta(btc, spx, date(2023, 1, 1), date(2024, 12, 31))
+        assert b["beta"] == pytest.approx(1.5, abs=0.05)
+        assert b["n"] == len(bdays[::2]) - 1
+
+
 class TestValidateDates:
 
     def test_change_the_day_after_an_announcement_is_explained(self):
@@ -209,6 +257,8 @@ class TestFomcStudyCommand:
         assert "Announcements: 8" in out
         assert "Date check: every target-rate change" in out
         assert "hawkish" in out and "dovish" in out
+        assert "Bitcoin beta to the S&P 500" in out
+        assert "around FOMC" in out and "all windows" in out
         events = pd.read_csv(out_csv)
         assert len(events) == 8
         assert list(events["rate_change_bps"]) == [0, 25, 50, 75, 75, 75, 75, 50]

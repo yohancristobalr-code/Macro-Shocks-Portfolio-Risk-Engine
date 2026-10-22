@@ -207,3 +207,48 @@ def validate_dates(fed_upper: pd.Series, dates: List[date], start: date, end: da
         if not any(0 <= (changed - d).days <= 3 for d in dates):
             unexplained.append(changed)
     return unexplained
+
+
+def beta(x: pd.Series, y: pd.Series, n_boot: int = 2000, seed: int = 0) -> Dict[str, float]:
+    """
+    OLS slope of y on x with a percentile-bootstrap 95% interval.
+
+    The bootstrap makes no normality assumption, which matters for Bitcoin's
+    fat-tailed returns. A fixed seed keeps the interval reproducible.
+    """
+    mask = x.notna() & y.notna()
+    xv, yv = x[mask].to_numpy(dtype=float), y[mask].to_numpy(dtype=float)
+    n = len(xv)
+    if n < 5 or np.var(xv) == 0:
+        return {"beta": np.nan, "ci_low": np.nan, "ci_high": np.nan, "n": n}
+
+    slope = np.cov(xv, yv, bias=True)[0, 1] / np.var(xv)
+
+    idx = np.random.default_rng(seed).integers(0, n, size=(n_boot, n))
+    xs, ys = xv[idx], yv[idx]
+    xd = xs - xs.mean(axis=1, keepdims=True)
+    yd = ys - ys.mean(axis=1, keepdims=True)
+    var = (xd ** 2).sum(axis=1)
+    ok = var > 0
+    boots = (xd * yd).sum(axis=1)[ok] / var[ok]
+    lo, hi = np.percentile(boots, [2.5, 97.5])
+    return {"beta": float(slope), "ci_low": float(lo), "ci_high": float(hi), "n": n}
+
+
+def event_beta(events: pd.DataFrame) -> Dict[str, float]:
+    """Bitcoin's beta to the S&P 500 in the FOMC reaction windows."""
+    return beta(events["spx_pct"], events["btc_pct"])
+
+
+def window_beta(btc: pd.Series, spx: pd.Series, start: date, end: date) -> Dict[str, float]:
+    """
+    Bitcoin's beta to the S&P 500 over all non-overlapping two-session windows
+    between ``start`` and ``end``. Same window length as the event study, many
+    more observations, so a much tighter interval.
+    """
+    spx = spx[(spx.index >= pd.Timestamp(start)) & (spx.index <= pd.Timestamp(end))]
+    btc_on_spx_days = btc.reindex(spx.index, method="ffill")
+    every_other = spx.index[::2]
+    spx_ret = spx.reindex(every_other).pct_change() * 100
+    btc_ret = btc_on_spx_days.reindex(every_other).pct_change() * 100
+    return beta(spx_ret, btc_ret)
