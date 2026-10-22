@@ -151,6 +151,71 @@ class TestAllocation:
             allocation.optimize(returns, assets, "max_sharpe")
 
 
+class TestStockBondMix:
+
+    def _universe(self, btc=True):
+        _, industries, market, fred = synthetic_inputs()
+        return allocation.build_universe(fred, industries, market, date(2017, 1, 1), date(2024, 5, 31),
+                                         include_btc=btc)
+
+    def test_sleeves_are_risk_parity_within_each_class(self):
+        returns, assets = self._universe()
+        s = allocation.sleeves(returns, assets)
+        assert set(s) == {"equity", "bonds", "bitcoin"}
+        assert len(s["equity"]) == 11 and set(s["bonds"].index) == {"UST10", "UST2"}
+        for w in s.values():
+            assert w.sum() == pytest.approx(1.0)
+        cov = (returns[s["bonds"].index].cov() * 252).to_numpy()
+        assert opt.risk_contributions(s["bonds"].to_numpy(), cov) == pytest.approx([0.5, 0.5], abs=1e-8)
+
+    def test_mix_weights_match_the_requested_split(self):
+        returns, assets = self._universe()
+        w = allocation.mix_weights(returns, assets, stocks=0.7, btc=0.03)
+        cls = allocation.class_summary(w, w, assets)["weight"]
+        assert cls["equity"] == pytest.approx(0.97 * 0.7)
+        assert cls["bonds"] == pytest.approx(0.97 * 0.3)
+        assert cls["bitcoin"] == pytest.approx(0.03)
+        all_stocks = allocation.class_summary(*(2 * [allocation.mix_weights(returns, assets, 1.0, 0.0)]), assets)
+        assert all_stocks.loc["equity", "weight"] == pytest.approx(1.0)
+        with pytest.raises(ValueError):
+            allocation.mix_weights(returns, assets, 1.2, 0.0)
+
+    def test_bitcoin_weight_ignored_without_bitcoin(self):
+        returns, assets = self._universe(btc=False)
+        w = allocation.mix_weights(returns, assets, stocks=0.6, btc=0.05)
+        cls = allocation.class_summary(w, w, assets)["weight"]
+        assert cls["equity"] == pytest.approx(0.6) and "bitcoin" not in cls
+
+    def test_frontier_and_choice(self):
+        returns, assets = self._universe()
+        frontier = allocation.drawdown_frontier(returns, assets, btc=0.03, stock_shares=(1.0, 0.8, 0.6, 0.4))
+        assert list(frontier["stocks"]) == [1.0, 0.8, 0.6, 0.4]
+        assert frontier["weight_equity"].is_monotonic_decreasing
+        assert frontier["volatility"].is_monotonic_decreasing
+        dds = frontier.set_index("stocks")["max_drawdown"]
+        limit = -(dds[0.8] + dds[0.6]) / 2
+        pick, ok = allocation.choose_for_drawdown(frontier, limit)
+        assert ok and pick["stocks"] == 0.6
+        pick, ok = allocation.choose_for_drawdown(frontier, 0.0001)
+        assert not ok and pick["stocks"] == 0.4
+
+    def test_mix_objective(self):
+        returns, assets = self._universe()
+        alloc = allocation.optimize(returns, assets, "mix", mix={"stocks": 0.8, "btc": 0.03})
+        assert alloc.classes.loc["equity", "weight"] == pytest.approx(0.97 * 0.8)
+        with pytest.raises(ValueError, match="needs a stock share"):
+            allocation.optimize(returns, assets, "mix")
+
+    def test_long_history_drawdown_leaves_bitcoin_out(self):
+        _, industries, market, fred = synthetic_inputs()
+        returns, assets = allocation.build_universe(fred, industries, market, date(2017, 1, 1), date(2024, 5, 31))
+        weights = pd.Series(1 / len(returns.columns), index=returns.columns)
+        check = allocation.long_history_drawdown(fred, industries, market, weights, assets, start=date(2015, 1, 1))
+        assert check["start"] < date(2015, 2, 1) and check["end"] == date(2024, 5, 31)
+        assert -1 < check["max_drawdown"] < 0
+        assert date(2015, 1, 1) <= check["trough"] <= date(2024, 5, 31)
+
+
 class TestOptimizeCommand:
 
     def test_end_to_end(self, monkeypatch, capsys, tmp_path):
@@ -169,6 +234,45 @@ class TestOptimizeCommand:
         assert "Utilities" in out and "Risk share" in out and "Max drawdown" in out
         assert load_portfolio(tmp_path / "opt.csv")["value"].sum() == pytest.approx(20000, abs=1)
 
+    def _patch(self, monkeypatch, tmp_path):
+        from macro_shock.data import feed_provider
+        texts, _, _, fred = synthetic_inputs()
+        monkeypatch.setattr(french, "download", lambda dataset, timeout=60.0: texts[dataset])
+        monkeypatch.setattr(feed_provider, "fred_client", lambda api_key=None: fred)
+        monkeypatch.chdir(tmp_path)
+
+    def test_max_drawdown_picks_from_the_frontier(self, monkeypatch, capsys, tmp_path):
+        from macro_shock import __main__ as cli
+        self._patch(monkeypatch, tmp_path)
+        monkeypatch.setattr(sys, "argv", ["msre", "optimize", "--years", "5", "--tilt", "0",
+                                          "--max-drawdown", "0.25", "--output", "opt.csv"])
+        cli.main()
+        out = capsys.readouterr().out
+        assert "stock/bond mix of risk-parity sleeves" in out and "Stocks vs drawdown (limit -25%)" in out
+        assert out.count("<- chosen") == 1
+        assert "Risk share" in out
+        assert "Longer history check" in out and "max drawdown" in out
+        assert load_portfolio(tmp_path / "opt.csv")["value"].sum() == pytest.approx(100000, abs=1)
+
+    def test_fixed_stock_share(self, monkeypatch, capsys, tmp_path):
+        from macro_shock import __main__ as cli
+        self._patch(monkeypatch, tmp_path)
+        monkeypatch.setattr(sys, "argv", ["msre", "optimize", "--tilt", "0", "--stocks", "0.7",
+                                          "--btc-weight", "0", "--years", "5", "--output", "opt.csv"])
+        cli.main()
+        df = load_portfolio(tmp_path / "opt.csv")
+        assert df.loc[df["type"] == "equity", "value"].sum() == pytest.approx(70000, abs=5)
+        assert "bitcoin" not in set(df["type"]) or df.loc[df["type"] == "bitcoin", "value"].sum() == 0
+
+    def test_invalid_stock_share_is_rejected(self, monkeypatch, capsys, tmp_path):
+        from macro_shock import __main__ as cli
+        self._patch(monkeypatch, tmp_path)
+        monkeypatch.setattr(sys, "argv", ["msre", "optimize", "--tilt", "0", "--stocks", "1.5"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 1
+        assert "--stocks must be between 0 and 1" in capsys.readouterr().out
+
     def test_tilt_off_skips_the_sector_study(self, monkeypatch, capsys, tmp_path):
         from macro_shock import __main__ as cli
         from macro_shock.data import feed_provider
@@ -182,4 +286,5 @@ class TestOptimizeCommand:
                                           "--objective", "min_variance", "--years", "5"])
         cli.main()
         out = capsys.readouterr().out
-        assert "minimum variance" in out and "Regime tilt: off" in out and "Bitcoin" not in out
+        assert "minimum variance" in out and "Regime tilt: off" in out
+        assert not any(line.strip().startswith("Bitcoin") for line in out.splitlines())
