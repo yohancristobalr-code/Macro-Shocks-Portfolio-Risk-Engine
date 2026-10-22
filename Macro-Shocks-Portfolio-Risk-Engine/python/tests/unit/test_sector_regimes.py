@@ -87,7 +87,9 @@ class TestFrenchReader:
             seen["url"] = url
             return Resp(buf.getvalue())
         monkeypatch.setattr(french.urllib.request, "urlopen", fake_urlopen)
+        french.download.cache_clear()
         text = french.download(french.INDUSTRIES_12)
+        french.download.cache_clear()
         assert seen["url"].endswith("/ftp/12_Industry_Portfolios_daily_CSV.zip")
         assert "Average Value Weighted Returns" in text
 
@@ -95,6 +97,7 @@ class TestFrenchReader:
         def boom(url, timeout):
             raise OSError("network unreachable")
         monkeypatch.setattr(french.urllib.request, "urlopen", boom)
+        french.download.cache_clear()
         with pytest.raises(french.FrenchDataError, match="network unreachable"):
             french.download(french.FACTORS_3)
 

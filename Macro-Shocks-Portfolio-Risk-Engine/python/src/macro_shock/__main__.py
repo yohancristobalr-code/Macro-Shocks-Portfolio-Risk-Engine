@@ -10,6 +10,7 @@ Commands:
   backtest    Run historical event study backtest
   fomc-study  Bitcoin / S&P 500 / VIX reaction to FOMC announcements (FRED data)
   sector-study Sectors and styles that did best in each market regime (French + FRED)
+  optimize    Sector / Treasury / Bitcoin weights by risk parity or minimum variance
   serve       Start the REST API server
   health      Run system health check
   demo        Run a canned scenario demonstration
@@ -22,6 +23,7 @@ Examples:
   python -m macro_shock backtest --start 2020-01-01 --end 2024-01-01
   python -m macro_shock fomc-study --output fomc_events.csv   # Bitcoin vs FOMC (FRED)
   python -m macro_shock sector-study                          # sectors by regime
+  python -m macro_shock optimize --output portfolio_optimized.csv
   python -m macro_shock serve --port 8000
   python -m macro_shock health --env production
   python -m macro_shock demo --scenario weekend_crisis
@@ -396,6 +398,79 @@ def cmd_sector_study(args: argparse.Namespace) -> None:
 
 
 # ──────────────────────────────────────────────────────────────
+# Command: optimize
+# ──────────────────────────────────────────────────────────────
+
+OBJECTIVE_NAMES = {"risk_parity": "risk parity", "min_variance": "minimum variance"}
+
+
+def cmd_optimize(args: argparse.Namespace) -> None:
+    """Risk-based sector / Treasury / Bitcoin allocation, tilted by the current regime's evidence."""
+    from datetime import date
+
+    import pandas as pd
+
+    from macro_shock.data.feed_provider import DataFeedError, fred_client
+    from macro_shock.research import allocation, french, sector_study
+    from macro_shock.research.french import FrenchDataError
+
+    try:
+        fred = fred_client()
+        industries = french.daily_returns(french.INDUSTRIES_12)
+        market = french.market_return(french.daily_returns(french.FACTORS_3))
+        end = industries.index[-1]
+        start = end - pd.DateOffset(years=args.years)
+        returns, assets = allocation.build_universe(
+            fred, industries, market, start.date(), end.date(), include_btc=not args.no_bitcoin)
+        tilts, notes, regime = {}, [], None
+        if args.tilt > 0:
+            study = sector_study.run(fred, date(1990, 1, 1))
+            regime = study.current_regime
+            tilts = allocation.regime_tilts(study.sectors, regime, args.tilt)
+            notes = allocation.style_notes(study.styles, regime)
+        alloc = allocation.optimize(returns, assets, args.objective, args.max_weight, tilts, regime, notes)
+    except (DataFeedError, FrenchDataError, ValueError) as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: could not build the allocation ({e}). A data source may be down; try again later.")
+        sys.exit(1)
+
+    sep = "─" * 72
+    print(f"\n{sep}")
+    print(f"  PORTFOLIO OPTIMIZER — {OBJECTIVE_NAMES[alloc.objective]}, daily data {alloc.start} to {alloc.end}")
+    print(sep)
+    if alloc.objective == "min_variance":
+        print(f"  Max weight per asset: {args.max_weight:.0%}")
+    if regime:
+        applied = ", ".join(f"{sector_study.sector_label(a)} {t:+.0%}" for a, t in alloc.tilts.items())
+        print(f"  Current regime: {regime}  ->  tilts: {applied or 'none (no robust/consistent sector evidence)'}")
+        for note in alloc.notes:
+            print(f"  Style evidence: {note} - express it with a style ETF; sector weights cannot")
+    elif args.tilt <= 0:
+        print("  Regime tilt: off")
+
+    print(f"\n  {'Asset':<26} {'ETF':<5} {'Base':>7} {'Tilted':>8} {'Risk share':>11}")
+    for code in alloc.tilted.sort_values(ascending=False).index:
+        a = alloc.assets[code]
+        print(f"  {a.label:<26} {a.etf:<5} {alloc.base[code]:>7.1%} {alloc.tilted[code]:>8.1%} "
+              f"{alloc.risk_share[code]:>11.1%}")
+
+    print(f"\n  {'':<10} {'Volatility':>11} {'Return/yr':>10} {'Max drawdown':>13}")
+    for name in ("base", "tilted"):
+        s = alloc.stats[name]
+        print(f"  {name.capitalize():<10} {s['volatility']:>11.1%} {s['annual_return']:>10.1%} "
+              f"{s['max_drawdown']:>13.1%}")
+    print("  Historical figures over the lookback window with daily rebalancing; not a forecast.")
+    print(sep + "\n")
+
+    allocation.to_portfolio_csv(alloc, args.value, args.output)
+    print(f"Tilted weights written to {args.output} (value {args.value:,.0f}). Stress-test them with:")
+    print(f"  python -m macro_shock analyze --title ... --institution ... --event-time ... "
+          f"--data fred --portfolio {args.output}")
+
+
+# ──────────────────────────────────────────────────────────────
 # Command: fomc-study
 # ──────────────────────────────────────────────────────────────
 
@@ -668,6 +743,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_sec.add_argument("--horizon", type=int, default=21, help="Window length in trading days (21 ~ 1 month)")
     p_sec.add_argument("--output", default=None, help="Write the full regime table to a CSV file")
     p_sec.set_defaults(func=cmd_sector_study)
+
+    p_opt = sub.add_parser("optimize", help="Sector/Treasury/Bitcoin weights (French Data Library + FRED)")
+    p_opt.add_argument("--objective", choices=["risk_parity", "min_variance"], default="risk_parity",
+                       help="risk_parity: equal risk from each asset; min_variance: lowest volatility")
+    p_opt.add_argument("--years", type=int, default=10, help="Lookback window in years")
+    p_opt.add_argument("--max-weight", type=float, default=0.30, help="Per-asset cap (min_variance only)")
+    p_opt.add_argument("--no-bitcoin", action="store_true", help="Leave Bitcoin out of the universe")
+    p_opt.add_argument("--tilt", type=float, default=0.25,
+                       help="Regime tilt per evidence level: consistent +/-tilt, robust +/-2x tilt; 0 = off")
+    p_opt.add_argument("--value", type=float, default=100000, help="Portfolio value for the output CSV")
+    p_opt.add_argument("--output", default="portfolio_optimized.csv", help="Output CSV (analyze --portfolio format)")
+    p_opt.set_defaults(func=cmd_optimize)
 
     p_srv = sub.add_parser("serve", help="Start the REST API server")
     p_srv.add_argument("--host", default="0.0.0.0")
