@@ -17,6 +17,7 @@ Examples:
   python -m macro_shock monitor --config configs/production.yaml
   python -m macro_shock analyze --event-file event.json
   python -m macro_shock analyze --event-file event.json --data fred   # real FRED data
+  python -m macro_shock analyze --event-file event.json --portfolio portfolio.csv
   python -m macro_shock backtest --start 2020-01-01 --end 2024-01-01
   python -m macro_shock fomc-study --output fomc_events.csv   # Bitcoin vs FOMC (FRED)
   python -m macro_shock serve --port 8000
@@ -143,6 +144,15 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     from macro_shock.orchestration.pipeline import MacroShockPipeline
     from macro_shock.data.ingestion import MarketStateBuilder
 
+    portfolio = None
+    if args.portfolio:
+        from macro_shock.portfolio_impact.portfolio_stress import PortfolioFileError, load_portfolio
+        try:
+            portfolio = load_portfolio(args.portfolio)
+        except PortfolioFileError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+
     cfg = _load_config(args.config, args.env)
     pipeline = MacroShockPipeline(config=cfg, environment=args.env)
 
@@ -190,6 +200,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
     # Print structured output
     _print_risk_report(ctx, data_source)
+    if portfolio is not None and ctx.scenario_tree:
+        _print_portfolio_stress(portfolio, ctx.scenario_tree)
 
     if args.output:
         result = {}
@@ -218,6 +230,26 @@ def _print_market_state(state, data_source: str) -> None:
           f"| SPX vs 52w high: {_fmt(drawdown, '+.1f')}%")
     if state.gap_description:
         print(f"    Note: {state.gap_description}")
+
+
+def _print_portfolio_stress(portfolio, tree) -> None:
+    from macro_shock.portfolio_impact.portfolio_stress import stress_portfolio
+
+    st = stress_portfolio(portfolio, tree)
+    sep = "─" * 65
+    print(f"  YOUR PORTFOLIO  ({len(portfolio)} positions, value {st.total_value:,.0f})")
+    print(sep)
+    print(f"  Expected:        {st.expected_pnl:>+12,.0f}  ({st.expected_pnl_pct:+.1f}%)")
+    print(f"  Worst 5% case:   {st.pnl_5pct:>+12,.0f}  ({st.pnl_5pct_pct:+.1f}%)")
+    print(f"\n  {'Scenario':<35} {'Prob':>6}  {'P&L':>12}  {'%':>7}")
+    for _, r in st.scenario_pnl.sort_values("pnl").iterrows():
+        print(f"  {r['scenario']:<35} {r['probability']:>5.1%}  {r['pnl']:>+12,.0f}  {r['pnl_pct']:>+6.1f}%")
+    print(f"\n  Largest losses in '{st.worst_scenario}':")
+    for name, pnl in st.worst_contributors().items():
+        if pnl < 0:
+            print(f"    {name:<30} {pnl:>+12,.0f}")
+    print("  Scenario magnitudes are illustrative; use for sizing, not as a forecast.")
+    print(sep + "\n")
 
 
 def _print_risk_report(ctx, data_source: str = "synthetic") -> None:
@@ -518,6 +550,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ana.add_argument("--text", default="", help="Prepared remarks / raw text")
     p_ana.add_argument("--data", choices=["synthetic", "fred"], default="synthetic",
                        help="Market data source: synthetic (default) or fred (needs FRED_API_KEY)")
+    p_ana.add_argument("--portfolio", default=None,
+                       help="CSV of your positions (name,type,value[,sensitivity]) to stress-test; "
+                            "see examples/portfolio_example.csv")
     p_ana.add_argument("--stress", type=float, default=0.35,
                        help="Market stress level 0-1 (synthetic data only)")
     p_ana.add_argument("--output", default=None, help="Write JSON output to file")
