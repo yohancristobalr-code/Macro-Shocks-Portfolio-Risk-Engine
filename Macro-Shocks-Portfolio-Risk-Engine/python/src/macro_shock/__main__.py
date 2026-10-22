@@ -344,7 +344,7 @@ def _print_sector_suggestions(regime: str, data_source: str) -> None:
     print(sep)
     if data_source != "fred":
         print("  Note: the regime above comes from synthetic market data; use --data fred for today's regime.")
-    for line in sector_study.regime_lines(study, regime):
+    for line in sector_study.supported_lines(study, regime):
         print(line)
     print(sector_study.FOOTNOTE)
     print(sep + "\n")
@@ -364,6 +364,7 @@ def cmd_sector_study(args: argparse.Namespace) -> None:
     print(f"  Period: {study.first_date} to {study.last_date}  |  window: {study.horizon} trading days, "
           f"non-overlapping  |  windows: {int(study.regime_counts.sum())}")
     print("  Regimes: " + "  ".join(f"{r} {n}" for r, n in study.regime_counts.items()))
+    print(f"  Robustness: each result is re-estimated on the halves before / after {study.split_date}")
     pc = study.proxy_check
     if pc["n"]:
         print(f"  Credit proxy check: BAA10Y-based regime matches the ICE-based one on "
@@ -381,6 +382,10 @@ def cmd_sector_study(args: argparse.Namespace) -> None:
     print(f"\n  CURRENT REGIME ({study.current_date}): {study.current_regime}"
           + (f"  (BAA10Y proxy: {study.current_regime_proxy})"
              if study.current_regime_proxy != study.current_regime else ""))
+    if study.current_regime:
+        print("  What the evidence supports for it:")
+        for line in sector_study.supported_lines(study, study.current_regime)[1:]:
+            print(line)
     print(sector_study.FOOTNOTE)
     print(sep + "\n")
 

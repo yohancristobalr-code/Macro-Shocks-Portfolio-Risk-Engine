@@ -175,12 +175,26 @@ class TestSectorStudy:
         assert study.current_date == date(2024, 6, 28)
         assert study.proxy_check["n"] > 100
 
-    def test_regime_lines_show_best_sector_and_flag_significance(self, patched_sources):
+    def test_regime_lines_show_best_sector_with_evidence_marker(self, patched_sources):
         study = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
-        lines = sector_study.regime_lines(study, "risk_off_correction", top=1)
-        assert lines[0].startswith("  risk_off_correction  (n=")
-        assert "+ Utilities (XLU)" in lines[2] and lines[2].endswith(" *")
+        lines = sector_study.regime_lines(study, "risk_on_expansion", top=1)
+        assert lines[0].startswith("  risk_on_expansion  (n=")
+        worst = [l for l in lines if "- Utilities (XLU)" in l][0]
+        assert worst.lstrip().startswith("**")            # lags in calm times, in both halves
+        assert "halves" in worst
         assert any("Value vs growth" in l for l in lines)
+
+    def test_supported_lines_keep_only_evidence_backed_results(self, patched_sources):
+        study = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
+        lines = sector_study.supported_lines(study, "risk_on_expansion")
+        assert any("lagging  Utilities (XLU)" in l for l in lines)
+        assert all("Technology" not in l for l in lines)      # tracks the market: no evidence
+        # The stressed spell sits in one half only, so nothing there can be robust
+        assert "the evidence supports no tilt" in sector_study.supported_lines(study, "risk_off_correction")[-1]
+
+    def test_split_date_is_mid_sample(self, patched_sources):
+        study = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
+        assert date(2019, 6, 1) < study.split_date < date(2020, 1, 31)
 
     def test_end_date_limits_the_sample(self, patched_sources):
         full = sector_study.run(patched_sources, date(2015, 1, 1), horizon=10)
@@ -207,6 +221,8 @@ class TestSectorCommands:
         assert "SECTORS AND STYLES BY MARKET REGIME" in out
         assert "Credit proxy check: BAA10Y-based regime matches the ICE-based one on" in out
         assert "real (rows) vs proxy (cols)" in out
+        assert "Robustness: each result is re-estimated on the halves" in out
+        assert "What the evidence supports for it:" in out
         assert "CURRENT REGIME (2024-06-28): risk_on_expansion" in out
         assert set(pd.read_csv(out_csv)["kind"]) == {"sector", "style"}
 
@@ -221,4 +237,5 @@ class TestSectorCommands:
         cli.main()
         out = capsys.readouterr().out
         assert "SECTORS AND STYLES IN THIS REGIME" in out
+        assert "halves split at" in out
         assert "synthetic market data; use --data fred" in out

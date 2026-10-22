@@ -166,3 +166,42 @@ class TestRegimePerformance:
         s = sr.suggestions(table, "stress", top=1)
         assert s["best"].iloc[0]["asset"] == "Defensive" and s["best"].iloc[0]["significant"]
         assert s["worst"].iloc[0]["asset"] == "Tracker" and not s["worst"].iloc[0]["significant"]
+
+
+class TestSplitRobustness:
+
+    @staticmethod
+    def _windows():
+        """60 windows, all in one regime; the split falls between window 30 and 31."""
+        rng = np.random.default_rng(1)
+        idx = pd.bdate_range("2000-01-03", periods=60, freq="21B")
+        half1, half2 = np.arange(60) < 30, np.arange(60) >= 30
+        alternating = np.tile([1.1, -0.9], 15)                      # mean +0.1, wide interval
+        fwd = pd.DataFrame({
+            "Robust": 1.0 + rng.normal(0, 0.2, 60),
+            "Consistent": np.where(half1, np.resize(alternating, 60), 1.0 + rng.normal(0, 0.1, 60)),
+            "Unstable": np.where(half1, 2.0 + rng.normal(0, 0.1, 60), -0.3 + rng.normal(0, 0.05, 60)),
+            "Nothing": np.tile([1.0, -1.0], 30),
+        }, index=idx)
+        labels = pd.Series("calm", index=idx)
+        return fwd, labels, idx[29]
+
+    def test_grades(self):
+        fwd, labels, split = self._windows()
+        table = sr.split_robustness(fwd, labels, split).set_index("asset")
+        assert table.loc["Robust", "evidence"] == "robust"
+        assert table.loc["Consistent", "evidence"] == "consistent"
+        assert table.loc["Unstable", "evidence"] == "unstable"
+        assert table.loc["Nothing", "evidence"] == ""
+        assert table.loc["Robust", "n_h1"] == 30 and table.loc["Robust", "n_h2"] == 30
+
+    def test_half_with_too_few_windows_gets_no_grade(self):
+        fwd, labels, _ = self._windows()
+        table = sr.split_robustness(fwd, labels, fwd.index[3]).set_index("asset")   # 4 vs 56 windows
+        assert (table["evidence"] == "").all()
+
+    def test_regime_performance_matches_window_summary(self):
+        assets, market, regimes = make_market()
+        direct = sr.regime_performance(assets, regimes, market, horizon=20)
+        fwd, labels = sr.window_returns(assets, regimes, market, horizon=20)
+        pd.testing.assert_frame_equal(direct, sr.summarize(fwd, labels))
