@@ -298,6 +298,23 @@ class TestPortfolioImpactTranslator:
         # Notes should mention Monday gap
         assert "Monday" in report.notes or "gap" in report.notes.lower()
 
+    # ── Crypto guidance ────────────────────────────────────────
+
+    def test_crypto_guidance_reports_bitcoin_estimate(self, translator, market):
+        score = make_score(85.0, SeverityLevel.CRITICAL, "EMERGENCY_DERISKING")
+        tree = make_tree(include_tail=True).model_copy(
+            update={"expected_btc_change_pct": -6.2, "btc_tail_loss_5pct": -14.0})
+        report = translator.generate(make_event(is_weekend=True), score, tree, market)
+        assert report.crypto_guidance.startswith("CRYPTO:")
+        assert "expected -6.2%" in report.crypto_guidance
+        assert "CME Bitcoin futures" in report.crypto_guidance
+        assert "before equities reopen" in report.crypto_guidance
+
+    def test_crypto_guidance_no_action_for_low_score(self, translator, market):
+        score = make_score(10.0, SeverityLevel.LOW, "NO_ACTION")
+        report = translator.generate(make_event(), score, make_tree(), market)
+        assert report.crypto_guidance.endswith("No action.")
+
     # ── Trading halt note ──────────────────────────────────────
 
     def test_trading_halt_note_uses_probability_weighted_risk(self, translator, market):

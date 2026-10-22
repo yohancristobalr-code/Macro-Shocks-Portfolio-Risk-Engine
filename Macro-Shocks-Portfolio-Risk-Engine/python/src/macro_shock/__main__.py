@@ -260,6 +260,8 @@ def _print_risk_report(ctx, data_source: str = "synthetic") -> None:
               f"| E[ΔVix]={tree.expected_vix_change:+.1f}pts")
         if tree.monday_gap_estimate_pct is not None:
             print(f"             Monday gap est: {tree.monday_gap_estimate_pct:+.1f}%")
+        print(f"  Bitcoin:   E[move]={tree.expected_btc_change_pct:+.1f}%  "
+              f"| 5th Pct={tree.btc_tail_loss_5pct:.1f}%")
 
     if ctx.portfolio_impact:
         pi = ctx.portfolio_impact
@@ -311,6 +313,7 @@ def cmd_fomc_study(args: argparse.Namespace) -> None:
         "around FOMC": fs.event_beta(events),
         "all windows": fs.window_beta(series["btc"], series["spx"], dates[0], dates[-1]),
     }
+    downside = fs.downside_ratio(series["btc"], series["spx"], dates[0], dates[-1])
 
     sep = "─" * 72
     print(f"\n{sep}")
@@ -343,6 +346,11 @@ def cmd_fomc_study(args: argparse.Namespace) -> None:
     b = betas["all windows"]
     if not np.isnan(b["beta"]):
         print(f"    -> on average, a 1% S&P 500 move came with a {b['beta']:.1f}% Bitcoin move")
+    print(f"    downside     ratio {downside['ratio']:>5.2f}  [{downside['ci_low']:.2f} to {downside['ci_high']:.2f}]  "
+          f"n={downside['n']}  (windows where the S&P 500 fell 2% or more)")
+    if not np.isnan(downside["ratio"]):
+        print(f"    -> when the S&P 500 fell sharply, Bitcoin fell {downside['ratio']:.1f}x as much on average"
+              f" (scenario engine setting: btc_tail_beta)")
 
     biggest = events.dropna(subset=["btc_pct"]).reindex(
         events["btc_pct"].abs().sort_values(ascending=False).index

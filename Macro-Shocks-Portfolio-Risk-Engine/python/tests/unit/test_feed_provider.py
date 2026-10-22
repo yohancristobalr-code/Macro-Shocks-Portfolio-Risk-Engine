@@ -190,4 +190,5 @@ class TestAnalyzeCommandWithFRED:
         out = capsys.readouterr().out
         assert "Market (FRED, end-of-day)" in out
         assert "VIX: 14.5" in out
+        assert "Bitcoin:   E[move]=" in out
         assert "COMPOSITE RISK SCORE" in out
