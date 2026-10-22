@@ -283,6 +283,8 @@ def cmd_fomc_study(args: argparse.Namespace) -> None:
     """Event study of Bitcoin, S&P 500 and VIX reactions to FOMC announcements."""
     from datetime import date
 
+    import numpy as np
+
     from macro_shock.data.feed_provider import DataFeedError, fred_client
     from macro_shock.research import fomc_study as fs
 
@@ -305,6 +307,10 @@ def cmd_fomc_study(args: argparse.Namespace) -> None:
     summary = fs.summarize(events)
     base = fs.btc_baseline(series["btc"], events)
     unexplained = fs.validate_dates(series["fed_upper"], dates, start, end)
+    betas = {
+        "around FOMC": fs.event_beta(events),
+        "all windows": fs.window_beta(series["btc"], series["spx"], dates[0], dates[-1]),
+    }
 
     sep = "─" * 72
     print(f"\n{sep}")
@@ -330,6 +336,13 @@ def cmd_fomc_study(args: argparse.Namespace) -> None:
           f"vs {base['typical_abs_move_pct']:.2f}% on a typical 2-day window ({base['ratio']:.2f}x)")
     print(f"  Correlation BTC move vs 2Y surprise: {base['corr_btc_vs_surprise']:+.2f}")
     print(f"  Correlation BTC move vs S&P 500 move: {base['corr_btc_vs_spx']:+.2f}")
+
+    print("\n  Bitcoin beta to the S&P 500 (2-day moves, 95% bootstrap interval):")
+    for label, b in betas.items():
+        print(f"    {label:<12} beta {b['beta']:>5.2f}  [{b['ci_low']:.2f} to {b['ci_high']:.2f}]  n={b['n']}")
+    b = betas["all windows"]
+    if not np.isnan(b["beta"]):
+        print(f"    -> on average, a 1% S&P 500 move came with a {b['beta']:.1f}% Bitcoin move")
 
     biggest = events.dropna(subset=["btc_pct"]).reindex(
         events["btc_pct"].abs().sort_values(ascending=False).index
