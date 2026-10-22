@@ -8,6 +8,7 @@ Commands:
   monitor     Continuous real-time event monitoring (production mode)
   analyze     Analyze a single event from JSON or CLI flags
   backtest    Run historical event study backtest
+  fomc-study  Bitcoin / S&P 500 / VIX reaction to FOMC announcements (FRED data)
   serve       Start the REST API server
   health      Run system health check
   demo        Run a canned scenario demonstration
@@ -17,6 +18,7 @@ Examples:
   python -m macro_shock analyze --event-file event.json
   python -m macro_shock analyze --event-file event.json --data fred   # real FRED data
   python -m macro_shock backtest --start 2020-01-01 --end 2024-01-01
+  python -m macro_shock fomc-study --output fomc_events.csv   # Bitcoin vs FOMC (FRED)
   python -m macro_shock serve --port 8000
   python -m macro_shock health --env production
   python -m macro_shock demo --scenario weekend_crisis
@@ -274,6 +276,78 @@ def _print_risk_report(ctx, data_source: str = "synthetic") -> None:
 
 
 # ──────────────────────────────────────────────────────────────
+# Command: fomc-study
+# ──────────────────────────────────────────────────────────────
+
+def cmd_fomc_study(args: argparse.Namespace) -> None:
+    """Event study of Bitcoin, S&P 500 and VIX reactions to FOMC announcements."""
+    from datetime import date
+
+    from macro_shock.data.feed_provider import DataFeedError, fred_client
+    from macro_shock.research import fomc_study as fs
+
+    start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+    dates = fs.announcement_dates(start, end)
+    if not dates:
+        print(f"ERROR: no FOMC announcements listed between {start} and {end}")
+        sys.exit(1)
+
+    try:
+        series = fs.fetch_series(fred_client(), start, end)
+    except DataFeedError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: could not download FRED data ({e}). FRED may be down; try again later.")
+        sys.exit(1)
+
+    events = fs.event_table(series, dates, args.threshold)
+    summary = fs.summarize(events)
+    base = fs.btc_baseline(series["btc"], events)
+    unexplained = fs.validate_dates(series["fed_upper"], dates, start, end)
+
+    sep = "─" * 72
+    print(f"\n{sep}")
+    print("  FOMC EVENT STUDY — Bitcoin, S&P 500 and VIX (FRED daily data)")
+    print(sep)
+    print(f"  Period: {dates[0]} to {dates[-1]}  |  Announcements: {len(dates)}")
+    print(f"  Surprise: 2Y yield move on the day; hawkish >= +{args.threshold:g}bps, dovish <= -{args.threshold:g}bps")
+    print("  Reaction window: last close before the announcement -> close of the next day")
+
+    if unexplained:
+        print("\n  ⚠  DATE CHECK FAILED: FRED shows target-rate changes on")
+        print("     " + ", ".join(str(d) for d in unexplained))
+        print("     with no listed announcement just before. The date list may be wrong.")
+    else:
+        print("\n  Date check: every target-rate change in FRED matches a listed announcement ✓")
+
+    print(f"\n  {'Stance':<9}{'N':>4}  {'BTC mean':>9}  {'BTC median':>10}  {'BTC up':>7}  {'SPX mean':>9}  {'VIX Δ':>6}")
+    for stance, r in summary.iterrows():
+        print(f"  {stance:<9}{int(r['n']):>4}  {r['btc_mean_pct']:>+8.2f}%  {r['btc_median_pct']:>+9.2f}%  "
+              f"{r['btc_up_share']:>6.0%}  {r['spx_mean_pct']:>+8.2f}%  {r['vix_mean_change']:>+6.2f}")
+
+    print(f"\n  BTC average absolute 2-day move: {base['fomc_abs_move_pct']:.2f}% around FOMC "
+          f"vs {base['typical_abs_move_pct']:.2f}% on a typical 2-day window ({base['ratio']:.2f}x)")
+    print(f"  Correlation BTC move vs 2Y surprise: {base['corr_btc_vs_surprise']:+.2f}")
+    print(f"  Correlation BTC move vs S&P 500 move: {base['corr_btc_vs_spx']:+.2f}")
+
+    biggest = events.dropna(subset=["btc_pct"]).reindex(
+        events["btc_pct"].abs().sort_values(ascending=False).index
+    ).head(5)
+    print("\n  Largest Bitcoin moves:")
+    for _, r in biggest.iterrows():
+        print(f"    {r['date']}  BTC {r['btc_pct']:+6.1f}%  | 2Y {r['surprise_bps']:+5.0f}bps "
+              f"| rate {r['rate_change_bps']:+4.0f}bps  [{r['stance']}]")
+
+    print("\n  Small sample and daily data: treat as associations, not causal effects.")
+    print(sep + "\n")
+
+    if args.output:
+        events.to_csv(args.output, index=False)
+        print(f"Event table written to: {args.output}")
+
+
+# ──────────────────────────────────────────────────────────────
 # Command: backtest
 # ──────────────────────────────────────────────────────────────
 
@@ -435,6 +509,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.set_defaults(func=cmd_backtest)
 
     # serve
+    p_fomc = sub.add_parser("fomc-study", help="Bitcoin/S&P 500/VIX reaction to FOMC (needs FRED_API_KEY)")
+    p_fomc.add_argument("--start", default="2017-01-01", help="First announcement date (YYYY-MM-DD)")
+    p_fomc.add_argument("--end", default="2025-12-31", help="Last announcement date (YYYY-MM-DD)")
+    p_fomc.add_argument("--threshold", type=float, default=5.0,
+                        help="2Y yield move (bps) that counts as a hawkish/dovish surprise")
+    p_fomc.add_argument("--output", default=None, help="Write the per-event table to a CSV file")
+    p_fomc.set_defaults(func=cmd_fomc_study)
+
     p_srv = sub.add_parser("serve", help="Start the REST API server")
     p_srv.add_argument("--host", default="0.0.0.0")
     p_srv.add_argument("--port", type=int, default=8000)

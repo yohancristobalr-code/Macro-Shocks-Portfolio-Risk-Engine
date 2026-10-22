@@ -126,8 +126,23 @@ class SyntheticFeedProvider(DataFeedProvider):
 
 
 # ──────────────────────────────────────────────────────────────
-# FRED Feed Provider (Free, EOD, Yields Only)
+# FRED Feed Provider (Free, EOD)
 # ──────────────────────────────────────────────────────────────
+
+def fred_client(api_key: Optional[str] = None):
+    """fredapi client using ``api_key`` or the FRED_API_KEY environment variable."""
+    api_key = api_key or os.getenv("FRED_API_KEY", "")
+    if not api_key:
+        raise DataFeedError(
+            "FRED_API_KEY is not set. Get a free key at "
+            "https://fred.stlouisfed.org/docs/api/api_key.html"
+        )
+    try:
+        from fredapi import Fred  # type: ignore
+    except ImportError:
+        raise DataFeedError("fredapi not installed. Run: pip install fredapi")
+    return Fred(api_key=api_key)
+
 
 class FREDFeedProvider(DataFeedProvider):
     """
@@ -171,16 +186,7 @@ class FREDFeedProvider(DataFeedProvider):
 
     def _get_fred(self):
         if self._fred is None:
-            if not self.api_key:
-                raise DataFeedError(
-                    "FRED_API_KEY is not set. Get a free key at "
-                    "https://fred.stlouisfed.org/docs/api/api_key.html"
-                )
-            try:
-                from fredapi import Fred  # type: ignore
-            except ImportError:
-                raise DataFeedError("fredapi not installed. Run: pip install fredapi")
-            self._fred = Fred(api_key=self.api_key)
+            self._fred = fred_client(self.api_key)
         return self._fred
 
     def _last_close_date(self, as_of: datetime):
