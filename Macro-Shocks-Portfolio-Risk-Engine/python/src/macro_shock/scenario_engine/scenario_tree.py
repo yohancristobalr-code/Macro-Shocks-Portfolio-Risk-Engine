@@ -198,9 +198,11 @@ SCENARIO_TEMPLATES = [
 # `msre fomc-study` on FRED data: 1.04 [0.76 to 1.37] over 2021-2025, and
 # 1.11 [0.37 to 1.80] in the FOMC windows alone.
 BTC_BETA_DEFAULT = 1.0
-# Tail scenarios: Bitcoin's downside ratio when the S&P 500 falls sharply.
-# Not yet measured on real data; until it is, tails use the ordinary beta.
-BTC_TAIL_BETA_DEFAULT = BTC_BETA_DEFAULT
+# Tail scenarios: Bitcoin's mean move / the S&P 500's over two-day windows
+# where the S&P 500 fell 2% or more, 2021-2025 (msre fomc-study): 1.16
+# [0.63 to 1.77], n=43. Same period as BTC_BETA_DEFAULT; the 2017-2020
+# regime had far larger Bitcoin-specific swings.
+BTC_TAIL_BETA_DEFAULT = 1.16
 
 
 def _percentile_outcome(values: np.ndarray, probabilities: np.ndarray, q: float) -> float:
