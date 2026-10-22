@@ -175,7 +175,9 @@ class TestAnalyzeCommandWithFRED:
         cli.main()
 
     def test_without_api_key_exits_with_clear_error(self, monkeypatch, capsys, tmp_path):
+        from macro_shock import __main__ as cli
         monkeypatch.chdir(tmp_path)                       # no .env to pick up
+        monkeypatch.setattr(cli, "_PROJECT_ROOT", tmp_path)
         monkeypatch.delenv("FRED_API_KEY", raising=False)
         with pytest.raises(SystemExit) as exc:
             self._run(monkeypatch)
@@ -192,3 +194,37 @@ class TestAnalyzeCommandWithFRED:
         assert "VIX: 14.5" in out
         assert "Bitcoin:   E[move]=" in out
         assert "COMPOSITE RISK SCORE" in out
+
+
+class TestEnvLoading:
+
+    def test_project_env_is_used_from_any_folder(self, monkeypatch, tmp_path):
+        from macro_shock import __main__ as cli
+        project, elsewhere = tmp_path / "project", tmp_path / "elsewhere"
+        project.mkdir(); elsewhere.mkdir()
+        (project / ".env").write_text("FRED_API_KEY=from-project\n")
+        monkeypatch.setenv("FRED_API_KEY", "placeholder")    # restored after the test
+        monkeypatch.delenv("FRED_API_KEY")
+        monkeypatch.chdir(elsewhere)
+        monkeypatch.setattr(cli, "_PROJECT_ROOT", project)
+        cli._load_env()
+        import os
+        assert os.environ["FRED_API_KEY"] == "from-project"
+
+    def test_env_in_current_folder_takes_precedence(self, monkeypatch, tmp_path):
+        from macro_shock import __main__ as cli
+        project, here = tmp_path / "project", tmp_path / "here"
+        project.mkdir(); here.mkdir()
+        (project / ".env").write_text("FRED_API_KEY=from-project\n")
+        (here / ".env").write_text("FRED_API_KEY=from-here\n")
+        monkeypatch.setenv("FRED_API_KEY", "placeholder")
+        monkeypatch.delenv("FRED_API_KEY")
+        monkeypatch.chdir(here)
+        monkeypatch.setattr(cli, "_PROJECT_ROOT", project)
+        cli._load_env()
+        import os
+        assert os.environ["FRED_API_KEY"] == "from-here"
+
+    def test_project_root_holds_pyproject(self):
+        from macro_shock import __main__ as cli
+        assert (cli._PROJECT_ROOT / "pyproject.toml").exists()

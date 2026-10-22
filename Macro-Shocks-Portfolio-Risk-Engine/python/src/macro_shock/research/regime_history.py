@@ -110,15 +110,21 @@ def regime_history(
     return pd.Series(out, dtype=object)
 
 
-def credit_proxy_agreement(series: Dict[str, pd.Series], step: int = 5) -> Dict[str, float]:
-    """Share of dates (every ``step``-th ICE observation) where proxy and real credit give the same regime."""
+def credit_proxy_agreement(series: Dict[str, pd.Series], step: int = 5) -> Dict[str, object]:
+    """
+    How often proxy and real credit give the same regime, over every ``step``-th
+    date with ICE data. ``matrix`` cross-tabulates real (rows) vs proxy (columns).
+    """
     dates = series["hy"].index.intersection(series["ig"].index)[::step]
     proxy = regime_history(series, dates, "proxy")
     real = regime_history(series, dates, "ice")
     both = proxy.notna() & real.notna()
     n = int(both.sum())
+    matrix = (pd.crosstab(real[both].rename("real"), proxy[both].rename("proxy"))
+              if n else pd.DataFrame())
     return {
         "agreement": float((proxy[both] == real[both]).mean()) if n else np.nan,
         "n": n,
         "since": dates[0].date() if len(dates) else None,
+        "matrix": matrix,
     }
