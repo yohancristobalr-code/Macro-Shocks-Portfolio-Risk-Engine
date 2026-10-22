@@ -121,6 +121,7 @@ class PortfolioImpactTranslator:
         comm_guidance = self._commodity_guidance(risk_score, scenario_tree)
         credit_guidance = self._credit_guidance(risk_score, scenario_tree, regime)
         vol_guidance = self._volatility_guidance(risk_score, scenario_tree, market_state)
+        crypto_guidance = self._crypto_guidance(risk_score, scenario_tree, event)
 
         # Generate specific hedge recommendations
         hedges = self._generate_hedges(
@@ -151,6 +152,7 @@ class PortfolioImpactTranslator:
             commodity_guidance=comm_guidance,
             credit_guidance=credit_guidance,
             vol_guidance=vol_guidance,
+            crypto_guidance=crypto_guidance,
             hedge_recommendations=hedges,
             estimated_portfolio_var_change=var_change,
             estimated_drawdown_risk=drawdown_risk,
@@ -346,6 +348,30 @@ class PortfolioImpactTranslator:
                 f"Reduce net short vega in portfolio. Consider low-cost tail hedges."
             )
         return f"VOLATILITY: Sub-score {vol_score:.0f}/100. Vol surface within normal range."
+
+    def _crypto_guidance(
+        self, score: CompositeRiskScore, tree: ScenarioTree, event: MacroEvent
+    ) -> str:
+        expected = tree.expected_btc_change_pct
+        tail = tree.btc_tail_loss_5pct
+        level = score.recommended_action_level
+        basis = (
+            f"Bitcoin estimated from the equity scenarios via its beta to the S&P 500: "
+            f"expected {expected:+.1f}%, 5th percentile {tail:.1f}%. "
+        )
+        weekend = (
+            "Bitcoin trades through the weekend and will price this event before equities reopen. "
+            if event.full_weekend_gap else ""
+        )
+        if level in ("EMERGENCY_DERISKING", "HEDGE"):
+            return (
+                f"CRYPTO: {basis}{weekend}"
+                f"Reduce crypto exposure and leverage; consider CME Bitcoin futures or options as a hedge. "
+                f"Beta is an average: in crashes Bitcoin has fallen several times more than equities."
+            )
+        if level == "REDUCE":
+            return f"CRYPTO: {basis}{weekend}Trim leveraged crypto positions."
+        return f"CRYPTO: {basis}{weekend}No action."
 
     # ------------------------------------------------------------------
     # Hedge Generation

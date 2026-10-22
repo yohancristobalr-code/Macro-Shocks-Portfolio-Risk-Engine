@@ -240,15 +240,48 @@ def event_beta(events: pd.DataFrame) -> Dict[str, float]:
     return beta(events["spx_pct"], events["btc_pct"])
 
 
+def _two_session_moves(btc: pd.Series, spx: pd.Series, start: date, end: date):
+    """% moves of the S&P 500 and Bitcoin over non-overlapping two-session windows."""
+    spx = spx[(spx.index >= pd.Timestamp(start)) & (spx.index <= pd.Timestamp(end))]
+    btc_on_spx_days = btc.reindex(spx.index, method="ffill")
+    every_other = spx.index[::2]
+    spx_ret = spx.reindex(every_other).pct_change() * 100
+    btc_ret = btc_on_spx_days.reindex(every_other).pct_change() * 100
+    return spx_ret, btc_ret
+
+
 def window_beta(btc: pd.Series, spx: pd.Series, start: date, end: date) -> Dict[str, float]:
     """
     Bitcoin's beta to the S&P 500 over all non-overlapping two-session windows
     between ``start`` and ``end``. Same window length as the event study, many
     more observations, so a much tighter interval.
     """
-    spx = spx[(spx.index >= pd.Timestamp(start)) & (spx.index <= pd.Timestamp(end))]
-    btc_on_spx_days = btc.reindex(spx.index, method="ffill")
-    every_other = spx.index[::2]
-    spx_ret = spx.reindex(every_other).pct_change() * 100
-    btc_ret = btc_on_spx_days.reindex(every_other).pct_change() * 100
-    return beta(spx_ret, btc_ret)
+    return beta(*_two_session_moves(btc, spx, start, end))
+
+
+def downside_ratio(
+    btc: pd.Series,
+    spx: pd.Series,
+    start: date,
+    end: date,
+    threshold_pct: float = -2.0,
+    n_boot: int = 2000,
+    seed: int = 0,
+) -> Dict[str, float]:
+    """
+    How far Bitcoin falls, on average, when the S&P 500 falls sharply:
+    mean Bitcoin move / mean S&P 500 move over the two-session windows where
+    the S&P 500 moved ``threshold_pct`` or worse. This is the multiplier the
+    scenario engine applies to equity losses in tail scenarios.
+    """
+    spx_ret, btc_ret = _two_session_moves(btc, spx, start, end)
+    mask = (spx_ret <= threshold_pct) & btc_ret.notna()
+    xv, yv = spx_ret[mask].to_numpy(dtype=float), btc_ret[mask].to_numpy(dtype=float)
+    n = len(xv)
+    if n < 5:
+        return {"ratio": np.nan, "ci_low": np.nan, "ci_high": np.nan, "n": n}
+
+    idx = np.random.default_rng(seed).integers(0, n, size=(n_boot, n))
+    boots = yv[idx].mean(axis=1) / xv[idx].mean(axis=1)
+    lo, hi = np.percentile(boots, [2.5, 97.5])
+    return {"ratio": float(yv.mean() / xv.mean()), "ci_low": float(lo), "ci_high": float(hi), "n": n}

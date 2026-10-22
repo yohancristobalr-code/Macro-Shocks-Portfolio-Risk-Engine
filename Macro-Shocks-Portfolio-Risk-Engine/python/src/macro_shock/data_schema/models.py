@@ -412,6 +412,7 @@ class ScenarioOutcome(BaseModel):
     dxy_change_pct: float = 0.0
     gold_change_pct: float = 0.0
     oil_change_pct: float = 0.0
+    btc_change_pct: float = 0.0          # Bitcoin, derived from equity_impact_pct via beta
 
     # Risk characteristics
     is_tail_scenario: bool = False
@@ -440,6 +441,8 @@ class ScenarioTree(BaseModel):
     expected_vix_change: float = 0.0
     tail_loss_5pct: float = 0.0          # 5th percentile equity outcome
     tail_loss_1pct: float = 0.0          # 1st percentile equity outcome
+    expected_btc_change_pct: float = 0.0
+    btc_tail_loss_5pct: float = 0.0      # 5th percentile Bitcoin outcome
 
     # Monday gap estimate (if weekend event)
     monday_gap_estimate_pct: Optional[float] = None
@@ -505,6 +508,7 @@ class PortfolioImpactReport(BaseModel):
     commodity_guidance: str = ""
     credit_guidance: str = ""
     vol_guidance: str = ""
+    crypto_guidance: str = ""
 
     # Specific hedges
     hedge_recommendations: List[HedgeRecommendation] = Field(default_factory=list)

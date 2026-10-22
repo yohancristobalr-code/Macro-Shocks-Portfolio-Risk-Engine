@@ -207,16 +207,17 @@ def run_scenario(scenario_name: str, config: dict, stress_level: float = 0.35) -
         print(f"  Expected VIX Δ:   {tree.expected_vix_change:+.1f}pts")
         print(f"  Tail Loss (5%):   {tree.tail_loss_5pct:.1f}%")
         print(f"  Tail Loss (1%):   {tree.tail_loss_1pct:.1f}%")
+        print(f"  Expected BTC:     {tree.expected_btc_change_pct:+.2f}%  (5th pct {tree.btc_tail_loss_5pct:.1f}%)")
         if tree.monday_gap_estimate_pct:
             print(f"  Monday Gap Est:   {tree.monday_gap_estimate_pct:.1f}%")
-        print(f"\n  {'Scenario':<35} {'Prob':>6}  {'Equity':>8}  {'10Y':>8}  {'VIX':>6}")
-        print(f"  {'-'*65}")
+        print(f"\n  {'Scenario':<35} {'Prob':>6}  {'Equity':>8}  {'10Y':>8}  {'VIX':>6}  {'BTC':>7}")
+        print(f"  {'-'*74}")
         for s in sorted(tree.scenarios, key=lambda x: x.probability, reverse=True):
             tail_mark = " *" if s.is_tail_scenario else ""
             print(
                 f"  {s.name:<35} {s.probability:>5.1%}  "
                 f"{s.equity_impact_pct:>+7.1f}%  {s.yield_10y_change_bps:>+7.0f}bps  "
-                f"{s.vix_change:>+5.1f}{tail_mark}"
+                f"{s.vix_change:>+5.1f}  {s.btc_change_pct:>+6.1f}%{tail_mark}"
             )
 
     if context.portfolio_impact:

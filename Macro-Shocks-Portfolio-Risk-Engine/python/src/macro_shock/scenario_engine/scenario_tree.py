@@ -194,6 +194,22 @@ SCENARIO_TEMPLATES = [
 ]
 
 
+# Bitcoin's beta to the S&P 500 over two-day moves, measured with
+# `msre fomc-study` on FRED data: 1.04 [0.76 to 1.37] over 2021-2025, and
+# 1.11 [0.37 to 1.80] in the FOMC windows alone.
+BTC_BETA_DEFAULT = 1.0
+# Tail scenarios: Bitcoin's downside ratio when the S&P 500 falls sharply.
+# Not yet measured on real data; until it is, tails use the ordinary beta.
+BTC_TAIL_BETA_DEFAULT = BTC_BETA_DEFAULT
+
+
+def _percentile_outcome(values: np.ndarray, probabilities: np.ndarray, q: float) -> float:
+    """Outcome at cumulative probability ``q`` of a discrete scenario distribution."""
+    order = np.argsort(values)
+    cumulative = np.cumsum(probabilities[order])
+    return float(values[order][np.searchsorted(cumulative, q)])
+
+
 class ScenarioTreeBuilder:
     """
     Builds a calibrated probability-weighted scenario tree.
@@ -214,6 +230,8 @@ class ScenarioTreeBuilder:
     def __init__(self, config: Optional[Dict] = None):
         self.config = config or {}
         self.random_state = np.random.RandomState(42)  # Reproducible for testing
+        self.btc_beta = self.config.get("btc_beta", BTC_BETA_DEFAULT)
+        self.btc_tail_beta = self.config.get("btc_tail_beta", BTC_TAIL_BETA_DEFAULT)
 
     def build(
         self,
@@ -229,6 +247,7 @@ class ScenarioTreeBuilder:
         scenarios = self._condition_on_surprise(scenarios, surprise_vector)
         scenarios = self._condition_on_regime(scenarios, vulnerability.regime)
         scenarios = self._apply_vulnerability_amplification(scenarios, vulnerability)
+        scenarios = self._add_bitcoin(scenarios)
         scenarios = self._apply_gap_corridor_amplification(scenarios, event)
         scenarios = self._normalize_probabilities(scenarios)
 
@@ -247,6 +266,7 @@ class ScenarioTreeBuilder:
                 dxy_change_pct=s["dxy_change_pct"],
                 gold_change_pct=s["gold_change_pct"],
                 oil_change_pct=s["oil_change_pct"],
+                btc_change_pct=s["btc_change_pct"],
                 is_tail_scenario=s["is_tail"],
                 liquidity_impairment=s["liquidity_impairment"],
                 correlation_spike_expected=s["correlation_spike"],
@@ -272,13 +292,12 @@ class ScenarioTreeBuilder:
         expected_vix = float(np.dot(probabilities, vix_changes))
 
         # Tail loss (5th and 1st percentile equity outcomes)
-        # Sort scenarios by equity impact
-        sorted_returns = np.sort(equity_returns)
-        sorted_probs = probabilities[np.argsort(equity_returns)]
-        cumulative_probs = np.cumsum(sorted_probs)
+        tail_5pct = _percentile_outcome(equity_returns, probabilities, 0.05)
+        tail_1pct = _percentile_outcome(equity_returns, probabilities, 0.01)
 
-        tail_5pct = float(sorted_returns[np.searchsorted(cumulative_probs, 0.05)])
-        tail_1pct = float(sorted_returns[np.searchsorted(cumulative_probs, 0.01)])
+        btc_returns = np.array([s.btc_change_pct for s in outcome_objects])
+        expected_btc = float(np.dot(probabilities, btc_returns))
+        btc_tail_5pct = _percentile_outcome(btc_returns, probabilities, 0.05)
 
         # Monday gap estimate (for weekend events)
         monday_gap = None
@@ -298,6 +317,8 @@ class ScenarioTreeBuilder:
             expected_vix_change=expected_vix,
             tail_loss_5pct=tail_5pct,
             tail_loss_1pct=tail_1pct,
+            expected_btc_change_pct=expected_btc,
+            btc_tail_loss_5pct=btc_tail_5pct,
             monday_gap_estimate_pct=monday_gap,
             monday_gap_confidence=monday_gap_conf,
         )
@@ -416,6 +437,19 @@ class ScenarioTreeBuilder:
             s["credit_hy_change_bps"] *= amp
             s["liquidity_impairment"] = min(s["liquidity_impairment"] * amp, 1.0)
 
+        return scenarios
+
+    def _add_bitcoin(self, scenarios: List[Dict]) -> List[Dict]:
+        """
+        Bitcoin move per scenario: beta times the equity move.
+
+        Applied after vulnerability amplification and before the weekend-gap
+        step: Bitcoin trades 24/7, so it absorbs weekend news as it arrives
+        instead of gapping at the Monday open like equities.
+        """
+        for s in scenarios:
+            beta = self.btc_tail_beta if s["is_tail"] else self.btc_beta
+            s["btc_change_pct"] = s["equity_impact_pct"] * beta
         return scenarios
 
     def _apply_gap_corridor_amplification(

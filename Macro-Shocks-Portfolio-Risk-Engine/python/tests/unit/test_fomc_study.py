@@ -184,6 +184,37 @@ class TestBeta:
         assert b["n"] == len(bdays[::2]) - 1
 
 
+class TestDownsideRatio:
+
+    @staticmethod
+    def _series_from_window_moves(spx_moves, btc_moves):
+        """Prices whose non-overlapping two-session moves are exactly the given moves."""
+        bdays = pd.bdate_range("2023-01-02", periods=2 * len(spx_moves) + 1)
+        spx_levels, btc_levels = [4000.0], [30000.0]
+        for r_spx, r_btc in zip(spx_moves, btc_moves):
+            spx_levels.append(spx_levels[-1] * (1 + r_spx / 100))
+            btc_levels.append(btc_levels[-1] * (1 + r_btc / 100))
+        anchors = bdays[::2]
+        spx = pd.Series(spx_levels, index=anchors).reindex(bdays, method="ffill")
+        btc = pd.Series(btc_levels, index=anchors).reindex(pd.date_range(bdays[0], bdays[-1]), method="ffill")
+        return btc, spx, bdays[0].date(), bdays[-1].date()
+
+    def test_measures_bitcoin_multiple_in_sharp_equity_falls(self):
+        spx_moves = [-3.0, 1.0, -2.5, 0.5, -4.0, -1.0, -2.0, 2.0, -5.0, 0.3]
+        btc_moves = [3 * r if r <= -2 else r for r in spx_moves]   # 3x in sell-offs only
+        btc, spx, start, end = self._series_from_window_moves(spx_moves, btc_moves)
+        d = fs.downside_ratio(btc, spx, start, end)
+        assert d["n"] == 5
+        assert d["ratio"] == pytest.approx(3.0)
+        assert d["ci_low"] == pytest.approx(3.0) and d["ci_high"] == pytest.approx(3.0)
+
+    def test_too_few_sell_offs_gives_nan(self):
+        spx_moves = [-3.0, 1.0, 0.5, -1.0]
+        btc, spx, start, end = self._series_from_window_moves(spx_moves, spx_moves)
+        d = fs.downside_ratio(btc, spx, start, end)
+        assert d["n"] == 1 and np.isnan(d["ratio"])
+
+
 class TestValidateDates:
 
     def test_change_the_day_after_an_announcement_is_explained(self):
@@ -259,6 +290,7 @@ class TestFomcStudyCommand:
         assert "hawkish" in out and "dovish" in out
         assert "Bitcoin beta to the S&P 500" in out
         assert "around FOMC" in out and "all windows" in out
+        assert "downside" in out
         events = pd.read_csv(out_csv)
         assert len(events) == 8
         assert list(events["rate_change_bps"]) == [0, 25, 50, 75, 75, 75, 75, 50]

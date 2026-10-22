@@ -337,6 +337,43 @@ class TestScenarioTreeBuilder:
         # Should have all 8 defined scenarios
         assert len(tree.scenarios) == 8
 
+    def test_bitcoin_follows_equity_beta_without_weekend_gap(
+        self, weekend_event, hawkish_surprise_vector, normal_market_state, vulnerability_scorer
+    ):
+        vuln = vulnerability_scorer.score(normal_market_state)
+        tree = ScenarioTreeBuilder({"btc_beta": 1.0, "btc_tail_beta": 1.0}).build(
+            weekend_event, hawkish_surprise_vector, vuln
+        )
+        # 55h to the open: equities in tail scenarios get the 1.40x gap amplification,
+        # Bitcoin (24/7) does not
+        for s in tree.scenarios:
+            if s.is_tail_scenario:
+                assert s.btc_change_pct == pytest.approx(s.equity_impact_pct / 1.40)
+
+    def test_tail_scenarios_use_tail_beta(
+        self, weekend_event, hawkish_surprise_vector, normal_market_state, vulnerability_scorer
+    ):
+        vuln = vulnerability_scorer.score(normal_market_state)
+        base = ScenarioTreeBuilder({"btc_beta": 1.0, "btc_tail_beta": 1.0}).build(
+            weekend_event, hawkish_surprise_vector, vuln)
+        tail = ScenarioTreeBuilder({"btc_beta": 1.0, "btc_tail_beta": 2.5}).build(
+            weekend_event, hawkish_surprise_vector, vuln)
+        for b, t in zip(base.scenarios, tail.scenarios):
+            factor = 2.5 if b.is_tail_scenario else 1.0
+            assert t.btc_change_pct == pytest.approx(b.btc_change_pct * factor)
+        assert tail.btc_tail_loss_5pct < base.btc_tail_loss_5pct
+        # Equity outcomes are untouched by the Bitcoin settings
+        assert tail.expected_equity_impact_pct == pytest.approx(base.expected_equity_impact_pct)
+
+    def test_expected_bitcoin_move_is_probability_weighted(
+        self, scenario_builder, weekend_event, hawkish_surprise_vector, normal_market_state, vulnerability_scorer
+    ):
+        vuln = vulnerability_scorer.score(normal_market_state)
+        tree = scenario_builder.build(weekend_event, hawkish_surprise_vector, vuln)
+        expected = sum(s.probability * s.btc_change_pct for s in tree.scenarios)
+        assert tree.expected_btc_change_pct == pytest.approx(expected)
+        assert tree.btc_tail_loss_5pct <= tree.expected_btc_change_pct
+
 
 # ---------------------------------------------------------------------------
 # Risk Scoring Tests
