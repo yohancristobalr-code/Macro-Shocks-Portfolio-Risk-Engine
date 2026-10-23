@@ -27,6 +27,7 @@ from macro_shock.research import charts, cpi_nowcast, growth, macro, macro_scena
 from macro_shock.research import carry as cy, crypto as cr, data_health, french, liquidity as lq
 from macro_shock.research import track_record as tr
 from macro_shock.research import metals as mt, sectors as sc, view as vw
+from macro_shock.research import agenda as ag, positioning as po, valuation as va
 
 logger = structlog.get_logger(__name__)
 
@@ -92,6 +93,10 @@ class Context:
     metals: Optional[mt.MetalsView] = None
     vix_term: Optional[pd.DataFrame] = None
     asset_view: Optional[pd.DataFrame] = None
+    valuation_series: Dict[str, pd.Series] = field(default_factory=dict)
+    valuation: Optional[va.Valuation] = None
+    positioning: Optional[po.Positioning] = None
+    agenda: Optional[pd.DataFrame] = None
 
 
 def _try(ctx: Context, name: str, fn):
@@ -188,6 +193,13 @@ def gather(fred, today: Optional[date] = None, quick: bool = False, track_path=N
         ctx.metals = mt.analyze(mt.fetch(fred), ctx.market_series.get("real10"), ctx.market_series.get("y10"))
     _try(ctx, "metales", metals_axis)
     ctx.vix_term = _try(ctx, "estructura del VIX", lambda: vw.vix_term(fred, ctx.today))
+
+    def valuation():
+        ctx.valuation_series = va.fetch(fred, ctx.today)
+        ctx.valuation = va.assess(ctx.valuation_series, ctx.market_series.get("equities"), with_returns=not quick)
+    _try(ctx, "valoración", valuation)
+    ctx.positioning = _try(ctx, "posicionamiento CFTC", po.fetch)
+    ctx.agenda = _try(ctx, "calendario", lambda: ag.upcoming(ctx.today))
     _try(ctx, "visión por activo", lambda: _asset_view(ctx))
 
     if quick:
@@ -216,8 +228,15 @@ def _asset_view(ctx: Context) -> None:
               "bitcoin": ctx.crypto.data.prices["BTC"].dropna() if ctx.crypto is not None else None}
     m = ctx.market
     best = m.best if m is not None else None
+    extra = {}
+    v = ctx.valuation
+    if v is not None and "erp" in v.percentiles:
+        p = v.percentiles["erp"]                   # low risk premium = expensive equities
+        extra["valuation"] = {"equities": -1 if p <= 0.2 else 1 if p >= 0.8 else 0}
+    if ctx.positioning is not None:
+        extra["positioning"] = ctx.positioning.signals()
     ctx.asset_view = vw.asset_view(series, best, m.status(best) if best else None,
-                                   ctx.axes.quadrant if ctx.axes else None)
+                                   ctx.axes.quadrant if ctx.axes else None, extra)
 
 
 def sector_picks(ctx: Context):
@@ -253,6 +272,11 @@ def health(ctx: Context) -> pd.DataFrame:
     if ctx.sectors is not None:
         sources["Stooq: sectores"] = {k: ctx.sectors.prices[k] for k in ctx.sectors.prices}
         sources["Stooq: sectores"].update({k: pd.Series(dtype=float) for k in ctx.sectors.errors})
+    if ctx.valuation_series:
+        sources["FRED valoración"] = ctx.valuation_series
+    if ctx.positioning is not None:
+        sources["CFTC posicionamiento"] = {po.CONTRACTS[k][1]: v for k, v in ctx.positioning.history.items()}
+        sources["CFTC posicionamiento"].update({po.CONTRACTS[k][1]: pd.Series(dtype=float) for k in ctx.positioning.errors})
     if ctx.metals is not None:
         sources["Metales"] = {f"{k} ({ctx.metals.data.source[k]})": v for k, v in ctx.metals.data.prices.items()}
     if ctx.nowcast is not None:
@@ -353,6 +377,20 @@ def executive(ctx: Context) -> List[str]:
         out.append(f"<b>Oro:</b> {g['gap_pct']:+.0f}% frente a lo que justificaría la tasa real ({g['gap_sd']:+.1f} sd; "
                    f"{'caro' if g['gap_sd'] > 1 else 'barato' if g['gap_sd'] < -1 else 'en línea'} respecto a esa relación)"
                    + (f"; ratio oro/plata {mv.gold_silver.iloc[-1]:.0f}" if mv.gold_silver is not None else "") + ".")
+    v = ctx.valuation
+    if v is not None:
+        n = v.now
+        txt = (f"<b>Valoración:</b> PER aproximado {n['pe']:.1f} (percentil {v.percentiles['pe']:.0%} desde 1951), "
+               f"indicador Buffett {n['buffett']:.0f}% del PIB (percentil {v.percentiles['buffett']:.0%})")
+        if "erp" in n:
+            txt += f", prima de riesgo {n['erp']:+.1f} pp (percentil {v.percentiles['erp']:.0%} desde 2003)"
+        f5 = v.next5y.get("pe")
+        if f5:
+            txt += (f". Con valoraciones en este quinto de la historia, la bolsa rindió {f5['same_fifth']:+.1f}% anual "
+                    f"los 5 años siguientes (media {f5['all']:+.1f}%)")
+        out.append(txt + ".")
+    if ctx.positioning is not None and ctx.positioning.alerts():
+        out.append("<b>Posicionamiento:</b> " + "; ".join(escape(a) for a in ctx.positioning.alerts()) + ".")
     for a in vw.vix_alert(ctx.vix_term):
         out.append(f"<b>Volatilidad:</b> {escape(a)}.")
     if ctx.regime:
@@ -848,7 +886,7 @@ def section_view(ctx: Context) -> str:
                                                            '<span class="neg">▼</span>' if v < 0 else "·")
     tag = {"Sobreponderar": "ok", "Infraponderar": "no", "Neutral": ""}
     rows = [[escape(r["asset"]), sig(r["trend"]), sig(r["momentum"]), sig(r["scenario"]), sig(r["quadrant"]),
-             _num(r["score"], "+.1f"), f'<span class="tag {tag[r["view"]]}">{r["view"]}</span>', f"{r['conviction']:.0%}"]
+             sig(r.get("valuation")), sig(r.get("positioning")), _num(r["score"], "+.1f"), f'<span class="tag {tag[r["view"]]}">{r["view"]}</span>', f"{r['conviction']:.0%}"]
             for _, r in av.iterrows()]
     top, bottom = sector_picks(ctx)
     picks = ""
@@ -857,10 +895,66 @@ def section_view(ctx: Context) -> str:
         picks = (f"<p><b>Sectores preferidos:</b> {', '.join(n(k) for k in top)} · <b>Evitar:</b> "
                  f"{', '.join(n(k) for k in bottom)}</p>")
     return (f'<div class="card"><h3>Visión sistemática por activo</h3>'
-            f'{_table(["Activo", "Tendencia", "Momentum 3m", "Escenario", "Cuadrante", "Puntos", "Visión", "Convicción"], rows)}'
+            f'{_table(["Activo", "Tendencia", "Momentum 3m", "Escenario", "Cuadrante", "Valoración", "Posicionamiento", "Puntos", "Visión", "Convicción"], rows)}'
             f'{picks}<p class="muted">Reglas fijas: ▲/▼ = señal a favor/en contra. Escenario y cuadrante según el manual '
-            f'estándar de cada escenario (escenario ×0.5 si es parcial). ≥ +2 sobreponderar, ≤ −2 infraponderar. '
-            f'Señal sistemática, no recomendación.</p></div>')
+            f'estándar de cada escenario (escenario ×0.5 si es parcial). Valoración: prima de riesgo de la bolsa en su '
+            f'20% más bajo (▼) o más alto (▲). Posicionamiento (contrario): especuladores en extremo largo (▼) o corto (▲). '
+            f'≥ +2 sobreponderar, ≤ −2 infraponderar. Señal sistemática, no recomendación.</p></div>' + section_agenda(ctx))
+
+
+def section_agenda(ctx: Context) -> str:
+    a = ctx.agenda
+    if a is None:
+        return ""
+    if a.empty:
+        return '<div class="card"><h3>Próximos 14 días</h3><p>Sin publicaciones clave.</p></div>'
+    tag = {"alto": "no", "medio": "", "bajo": ""}
+    rows = [[escape(r["date"]), escape(r["event"]), f'<span class="tag {tag[r["impact"]]}">{r["impact"]}</span>']
+            for _, r in a.iterrows()]
+    return (f'<div class="card"><h3>Próximos 14 días</h3>{_table(["Fecha", "Publicación", "Impacto"], rows)}'
+            '<p class="muted">Calendario de FRED y reuniones de la Fed. El PMI de S&amp;P Global no figura en FRED '
+            '(se publica hacia el día 20–23).</p></div>')
+
+
+def section_valuation(ctx: Context) -> str:
+    v = ctx.valuation
+    if v is None:
+        return _missing(ctx, "valoración")
+    n, p = v.now, v.percentiles
+    cards = [_kpi("PER aproximado", f"{n['pe']:.1f} <span class='muted'>p{p['pe'] * 100:.0f}</span>"),
+             _kpi("Indicador Buffett", f"{n['buffett']:.0f}% PIB <span class='muted'>p{p['buffett'] * 100:.0f}</span>")]
+    if "erp" in n:
+        cards.append(_kpi("Prima de riesgo", f"{n['erp']:+.1f} pp <span class='muted'>p{p['erp'] * 100:.0f}</span>"))
+    rows = [[{"pe": "PER aproximado", "buffett": "Indicador Buffett"}[k], _num(x["same_fifth"], "+.1f", "%"),
+             _num(x["all"], "+.1f", "%"), str(int(x["n"]))] for k, x in v.next5y.items()]
+    link = (f'<div class="card"><h3>Rentabilidad anual de la bolsa los 5 años siguientes</h3>'
+            f'{_table(["Con valoración en el quinto actual de", "Media de esos trimestres", "Media de todos", "Trimestres"], rows)}'
+            '<p class="muted">Relación histórica medida desde 1951; no es un objetivo de precio.</p></div>') if rows else ""
+    h = v.history
+    ch = charts.line_chart({"PER aproximado": h["pe"]}, "PER aproximado desde 1951", note="valor de mercado / beneficios")
+    ch += charts.line_chart({"Prima de riesgo (pp)": h["erp"].dropna()}, "Prima de riesgo: rentabilidad de beneficios − tasa real",
+                            zero=True, note="baja = bolsa cara frente a bonos")
+    return (f'<div class="kpis">{"".join(cards)}</div>{link}<div class="grid2">{ch}</div>'
+            f'<p class="muted">Datos trimestrales de la Reserva Federal (cuentas Z.1) y beneficios del BEA hasta {n["quarter"]}, '
+            f'llevados a hoy con el S&amp;P 500 ({n["growth_since_quarter"]:+.1f}% desde ese trimestre). Los niveles difieren '
+            f'del PER del S&amp;P 500 publicado; lo útil es el percentil.</p>')
+
+
+def section_positioning(ctx: Context) -> str:
+    po_ = ctx.positioning
+    if po_ is None:
+        return _missing(ctx, "posicionamiento CFTC")
+    rows = []
+    for k, r in po_.table.iterrows():
+        idx = r["cot_index"]
+        tag = '<span class="tag no">extremo</span>' if idx >= po.HIGH or idx <= po.LOW else ""
+        rows.append([escape(r["label"]), _num(r["net_pct_oi"], "+.1f", "%"), f"{idx:.0f} {tag}",
+                     _num(r["change_1w"], "+.1f", " pp"), str(r["date"])])
+    al = "".join(f"<li>{escape(a)}</li>" for a in po_.alerts()) or "<li>Ningún extremo.</li>"
+    err = f'<p class="muted">Sin datos: {escape(", ".join(sorted(po_.errors)))}</p>' if po_.errors else ""
+    return (f'<div class="card">{_table(["Contrato", "Especuladores netos (% interés abierto)", "Índice COT 3 años (0–100)", "Cambio semanal", "Fecha"], rows)}'
+            f'<ul>{al}</ul><p class="muted">CFTC, informe de compromisos de operadores (no comerciales), publicado los '
+            f'viernes con datos del martes. Extremos (≥ 90 o ≤ 10): señal contraria.</p>{err}</div>')
 
 
 def section_sectors(ctx: Context) -> str:
@@ -953,22 +1047,25 @@ def render(ctx: Context) -> str:
     bullets = "".join(f"<li>{b}</li>" for b in executive(ctx))
     errs = "".join(f"<li>{escape(k)}: {escape(v)}</li>" for k, v in ctx.errors.items())
     sections = [
-        ("1. Qué descuenta el mercado", section_market(ctx)),
-        ("2. Crecimiento, inflación y cuadrante macro", section_macro(ctx)),
-        ("3. Energía e IPC", section_energy(ctx)),
-        ("4. Régimen de riesgo", section_risk(ctx)),
-        ("5. Evidencia sectorial", section_evidence(ctx) if ctx.regime_study or ctx.quadrant_study
+        ("Qué descuenta el mercado", section_market(ctx)),
+        ("Crecimiento, inflación y cuadrante macro", section_macro(ctx)),
+        ("Energía e IPC", section_energy(ctx)),
+        ("Régimen de riesgo", section_risk(ctx)),
+        ("Valoración de la bolsa", section_valuation(ctx)),
+        ("Posicionamiento (CFTC)", section_positioning(ctx)),
+        ("Evidencia sectorial", section_evidence(ctx) if ctx.regime_study or ctx.quadrant_study
          else '<p class="muted">Omitida (--quick).</p>'),
-        ("6. Sectores del S&P 500", section_sectors(ctx)),
-        ("7. Metales: oro, plata y cobre", section_metals(ctx)),
-        ("8. Análogos históricos y modelo predictivo", section_history(ctx) if "análogos y modelo" in ctx.errors or ctx.analogs
+        ("Sectores del S&P 500", section_sectors(ctx)),
+        ("Metales: oro, plata y cobre", section_metals(ctx)),
+        ("Análogos históricos y modelo predictivo", section_history(ctx) if "análogos y modelo" in ctx.errors or ctx.analogs
          else '<p class="muted">Omitida (--quick).</p>'),
-        ("9. Cripto", section_crypto(ctx)),
-        ("10. Liquidez de la Fed", section_liquidity(ctx)),
-        ("11. Carry del yen", section_carry(ctx)),
-        ("12. Historial de aciertos del motor", section_track(ctx)),
-        ("13. Salud de los datos", section_health(ctx)),
+        ("Cripto", section_crypto(ctx)),
+        ("Liquidez de la Fed", section_liquidity(ctx)),
+        ("Carry del yen", section_carry(ctx)),
+        ("Historial de aciertos del motor", section_track(ctx)),
+        ("Salud de los datos", section_health(ctx)),
     ]
+    sections = [(f"{i}. {t}", h) for i, (t, h) in enumerate(sections, 1)]
     body = "".join(f"<h2>{escape(t)}</h2>{s}" for t, s in sections)
     return f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
