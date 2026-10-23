@@ -228,6 +228,8 @@ class TestDataHealth:
         assert ahead.iloc[0]["age"] == 0 and ahead.iloc[0]["status"] == "ok"          # UTC one day ahead
         oecd = pd.Series(1.0, pd.date_range(end="2026-08-01", periods=24, freq="MS"))     # ~2.5 months late
         assert data_health.check({"FRED": {"jp3m": oecd}}, today).iloc[0]["status"] == "ok"
+        z1 = pd.Series(1.0, pd.date_range(end="2026-04-01", periods=40, freq="QS"))      # Q2 published in September
+        assert data_health.check({"FRED": {"equities": z1}}, today).iloc[0]["status"] == "ok"
         short = data_health.check({"FRED": {"two": pd.Series(1.0, pd.DatetimeIndex(["2026-08-01", "2026-09-01"]))}}, today)
         assert short.iloc[0]["status"] == "ok"                          # unknown frequency: no false alarm
 

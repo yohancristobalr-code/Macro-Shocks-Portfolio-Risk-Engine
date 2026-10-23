@@ -2,6 +2,13 @@
 
 Las versiones se fijan en `pyproject.toml`. Cada cambio entra por un pull request a `main` con los tests de GitHub en verde.
 
+## 1.2.1 — 23 de octubre de 2026
+
+**PR #24: fuentes de precios de sectores y metales**
+- Stooq empezó a devolver una página web en lugar del CSV, y la sección de sectores fallaba. Ahora los precios se piden a Yahoo Finance, luego a Nasdaq.com y después a Stooq. Si ninguno responde, se usan las industrias de French (con 1–2 meses de retraso) y la sección se genera igual.
+- Oro, plata y cobre: futuros de COMEX en Yahoo, con toda la historia, antes de los respaldos (Binance y FMI).
+- Salud de los datos: las series trimestrales admiten 230 días (se fechan al inicio del trimestre y se publican unos 2.5 meses después).
+
 ## 1.2.0 — 23 de octubre de 2026
 
 **PR #23: valoración, posicionamiento, calendario y documentación del proyecto**

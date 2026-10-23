@@ -183,10 +183,10 @@ def gather(fred, today: Optional[date] = None, quick: bool = False, track_path=N
     _try(ctx, "carry del yen", yen_carry)
 
     def sp_sectors():
-        prices, errors = sc.fetch()
+        prices, errors, source = sc.fetch()
         factors = ms.levels(ctx.market_series) if ctx.market_series else None
         moves = ctx.market.moves["change"] if ctx.market is not None else None
-        ctx.sectors = sc.analyze(prices, factors, moves, errors)
+        ctx.sectors = sc.analyze(prices, factors, moves, errors, source)
     _try(ctx, "sectores S&P 500", sp_sectors)
 
     def metals_axis():
@@ -270,8 +270,9 @@ def health(ctx: Context) -> pd.DataFrame:
     sources = {"FRED mercado": ctx.market_series, "FRED crecimiento": ctx.growth_series,
                "FRED liquidez": ctx.liq_series, "FRED carry del yen": ctx.carry_series}
     if ctx.sectors is not None:
-        sources["Stooq: sectores"] = {k: ctx.sectors.prices[k] for k in ctx.sectors.prices}
-        sources["Stooq: sectores"].update({k: pd.Series(dtype=float) for k in ctx.sectors.errors})
+        name = f"Sectores ({ctx.sectors.source})"
+        sources[name] = {k: ctx.sectors.prices[k] for k in ctx.sectors.prices}
+        sources[name].update({k: pd.Series(dtype=float) for k in ctx.sectors.errors if k not in ctx.sectors.prices})
     if ctx.valuation_series:
         sources["FRED valoración"] = ctx.valuation_series
     if ctx.positioning is not None:
@@ -1002,8 +1003,10 @@ def section_sectors(ctx: Context) -> str:
         out += charts.line_chart({"Cíclicos / defensivos": norm(cyc) / norm(dfn) * 100}, "Rotación: cíclicos frente a defensivos (base 100)",
                                  note="sube = apetito por riesgo")
     out += "</div>"
-    if v.errors:
-        out += f'<p class="muted">Sin datos: {escape(", ".join(sorted(v.errors)))}</p>'
+    out += f'<p class="muted">Fuente de precios: {escape(v.source)}.</p>'
+    missing = [k for k in v.errors if k not in v.prices]
+    if missing:
+        out += f'<p class="muted">Sin datos: {escape(", ".join(sorted(missing)))}</p>'
     return out
 
 

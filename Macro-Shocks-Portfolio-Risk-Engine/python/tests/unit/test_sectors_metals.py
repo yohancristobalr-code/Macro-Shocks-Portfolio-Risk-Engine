@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from macro_shock.research import macro_scenario as ms, metals as mt, sectors as sc, stooq, view as vw
+from macro_shock.research import french, macro_scenario as ms, metals as mt, prices as px, sectors as sc, stooq, view as vw
 
 TODAY = pd.Timestamp(date.today())
 DAYS = pd.bdate_range(end=TODAY, periods=1600)
@@ -64,6 +64,24 @@ def fake_stooq(prices, missing=()):
     return get
 
 
+def blocked(url, timeout=20.0):
+    raise OSError("HTTP Error 403: Forbidden")
+
+
+def fake_yahoo(prices):
+    def get(url, timeout=20.0):
+        if "finance.yahoo.com" not in url:
+            raise OSError("not yahoo")
+        sym = url.split("/chart/")[1].split("?")[0]
+        if sym not in prices:
+            return {"chart": {"result": None, "error": {"code": "Not Found"}}}
+        s = prices[sym]
+        return {"chart": {"result": [{"timestamp": [int(d.timestamp()) for d in s.index],
+                                      "indicators": {"quote": [{"close": list(s * 0.99)}],
+                                                     "adjclose": [{"adjclose": list(s)}]}}], "error": None}}
+    return get
+
+
 @pytest.fixture(scope="module")
 def f():
     return factors()
@@ -84,10 +102,40 @@ class TestStooq:
             stooq.daily_close("nope.us", get)
 
 
+class TestSources:
+
+    def test_yahoo_uses_adjusted_close(self, prices):
+        s = px.yahoo("XLK", fake_yahoo(prices))
+        assert s.iloc[-1] == pytest.approx(prices["XLK"].iloc[-1]) and len(s) == len(DAYS)
+
+    def test_nasdaq_parses_dollars_and_dates(self):
+        rows = [{"date": "10/22/2026", "close": "$1,250.10"}, {"date": "10/21/2026", "close": "$1,240.00"}]
+        s = px.nasdaq("XLK", lambda url, timeout=20.0: {"data": {"tradesTable": {"rows": rows}}})
+        assert list(s) == [1240.0, 1250.10] and s.index[-1] == pd.Timestamp("2026-10-22")
+
+    def test_chain_order(self, prices):
+        s, src = px.etf_close("XLK", fake_yahoo(prices), fake_stooq(prices))
+        assert src == "Yahoo"
+        s, src = px.etf_close("XLK", blocked, fake_stooq(prices))
+        assert src == "Stooq"
+        with pytest.raises(ValueError, match="Yahoo.*Nasdaq.*Stooq"):
+            px.etf_close("XLK", blocked, lambda url, timeout=20.0: "<!DOCTYPE html><html>")
+
+    def test_french_fallback_when_every_source_is_blocked(self, monkeypatch):
+        from .test_sector_study import french_texts
+        texts = french_texts(pd.bdate_range("2012-01-02", "2024-05-31"))
+        monkeypatch.setattr(french, "download", lambda dataset, timeout=60.0: texts[dataset])
+        p, errors, source = sc.fetch(blocked, lambda url, timeout=20.0: "<!DOCTYPE html>")
+        assert source.startswith("French Data Library") and "SPY" in p and "XLK" in p and "XLRE" not in p
+        view = sc.analyze(p, None, None, errors, source)
+        assert len(view.table) == 10 and view.source == source
+
+
 class TestSectors:
 
     def test_planted_betas_and_scenarios(self, prices, f):
-        p, errors = sc.fetch(fake_stooq(prices))
+        p, errors, source = sc.fetch(blocked, fake_stooq(prices))
+        assert source == "Stooq"
         view = sc.analyze(p, f[["y10", "oil", "dollar", "credit"]], None, errors)
         t = view.table
         assert t.at["XLE", "beta_oil"] == pytest.approx(0.5, abs=0.12)
@@ -97,11 +145,12 @@ class TestSectors:
         assert view.scenarios["supply_shock"].idxmax() == "XLE"
         assert 0 <= view.breadth <= 1 and not errors
 
-    def test_missing_sector_and_missing_spy(self, prices, f):
-        p, errors = sc.fetch(fake_stooq(prices, missing=("XLRE",)))
+    def test_missing_sector_and_missing_spy(self, prices, f, monkeypatch):
+        p, errors, _ = sc.fetch(blocked, fake_stooq(prices, missing=("XLRE",)))
         assert "XLRE" in errors and "XLRE" not in sc.analyze(p, None, None, errors).table.index
+        monkeypatch.setattr(sc, "french_fallback", lambda: (_ for _ in ()).throw(OSError("Dartmouth down")))
         with pytest.raises(ValueError, match="SPY"):
-            sc.fetch(fake_stooq(prices, missing=("SPY",)))
+            sc.fetch(blocked, fake_stooq(prices, missing=("SPY",)))
 
 
 class TestMetals:
@@ -109,6 +158,9 @@ class TestMetals:
     def test_gold_vs_real_yield_and_ratios(self, prices, f, monkeypatch):
         d = mt.fetch(get_text=fake_stooq(prices), get_json=lambda url, timeout=20.0: (_ for _ in ()).throw(OSError("blocked")))
         assert set(d.prices) == {"gold", "silver", "copper"} and d.source["gold"] == "Stooq"
+        y = mt.fetch(get_text=fake_stooq({}), get_json=fake_yahoo({"GC=F": prices["xauusd"], "SI=F": prices["xagusd"],
+                                                                   "HG=F": prices["hg.f"]}))
+        assert y.source["gold"] == "Yahoo (futuro COMEX)" and len(y.prices["gold"]) == len(DAYS)
         v = mt.analyze(d, f["real10"], f["y10"])
         assert v.gold_vs_real["slope_pct_per_100bp"] == pytest.approx(-15, abs=3)
         assert v.gold_silver.iloc[-1] > 0 and v.copper_gold is not None

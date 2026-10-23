@@ -132,8 +132,9 @@ class TestReportCommand:
         from macro_shock.data import feed_provider
         from macro_shock.research import crypto
         monkeypatch.setattr(crypto, "http_json", FakeAPI(synthetic_prices()))
-        from macro_shock.research import agenda, stooq
+        from macro_shock.research import agenda, prices, stooq
         monkeypatch.setattr(stooq, "http_text", fake_stooq(market_prices(sector_factors())))
+        monkeypatch.setattr(prices, "http_json", lambda url, timeout=20.0: (_ for _ in ()).throw(OSError("blocked")))
         monkeypatch.setattr(agenda, "_get", lambda url: {"release_dates": [
             {"release_name": "Consumer Price Index", "date": str(TODAY.date())}]})
         texts = french_by_quadrant(pd.bdate_range("1970-01-02", TODAY))
