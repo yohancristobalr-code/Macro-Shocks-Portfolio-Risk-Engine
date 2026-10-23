@@ -34,6 +34,8 @@ BONDS = {
 }
 BTC_SERIES = "CBBTCUSD"
 EVIDENCE_TILT = {"robust": 2.0, "consistent": 1.0}   # multiples of the base tilt strength
+ASSET_CLASS = {"equity": "equity", "bond": "bonds", "short_bond": "bonds", "bitcoin": "bitcoin"}
+CLASSES = ("equity", "bonds", "bitcoin")
 
 
 @dataclass
@@ -103,6 +105,42 @@ def style_notes(styles: pd.DataFrame, regime: Optional[str]) -> List[str]:
             f"({r['evidence']})" for _, r in t.iterrows()]
 
 
+def sleeves(returns: pd.DataFrame, assets: Dict[str, Asset]) -> Dict[str, pd.Series]:
+    """Within-class risk-parity weights (summing to 1) for each asset class present."""
+    cov = returns.cov() * 252
+    out = {}
+    for cls in CLASSES:
+        members = [c for c in returns.columns if ASSET_CLASS[assets[c].kind] == cls]
+        if members:
+            sub = cov.loc[members, members].to_numpy()
+            out[cls] = pd.Series(opt.risk_parity(sub) if len(members) > 1 else [1.0], index=members)
+    return out
+
+
+def mix_weights(returns: pd.DataFrame, assets: Dict[str, Asset], stocks: float, btc: float) -> pd.Series:
+    """
+    ``stocks`` of the non-Bitcoin money in the equity sleeve, the rest in the bond
+    sleeve, and ``btc`` in Bitcoin (0 when Bitcoin is not in the universe).
+    """
+    if not 0 <= stocks <= 1:
+        raise ValueError("the stock share must be between 0 and 1")
+    s = sleeves(returns, assets)
+    btc = btc if "bitcoin" in s else 0.0
+    w = pd.Series(0.0, index=returns.columns)
+    parts = {"equity": (1 - btc) * stocks, "bonds": (1 - btc) * (1 - stocks), "bitcoin": btc}
+    for cls, amount in parts.items():
+        if cls in s:
+            w[s[cls].index] += s[cls] * amount
+    return w / w.sum()
+
+
+def class_summary(weights: pd.Series, risk_share: pd.Series, assets: Dict[str, Asset]) -> pd.DataFrame:
+    """Weight and risk share per asset class."""
+    cls = pd.Series({c: ASSET_CLASS[assets[c].kind] for c in weights.index})
+    out = pd.DataFrame({"weight": weights.groupby(cls).sum(), "risk_share": risk_share.groupby(cls).sum()})
+    return out.reindex([c for c in CLASSES if c in out.index])
+
+
 @dataclass
 class Allocation:
     objective: str
@@ -116,18 +154,32 @@ class Allocation:
     regime: Optional[str]
     tilts: Dict[str, float]
     notes: List[str] = field(default_factory=list)
+    mix: Optional[Dict[str, float]] = None     # {"stocks": share of non-Bitcoin money, "btc": weight}
+
+    @property
+    def classes(self) -> pd.DataFrame:
+        return class_summary(self.tilted, self.risk_share, self.assets)
 
 
 def optimize(
     returns: pd.DataFrame, assets: Dict[str, Asset], objective: str = "risk_parity",
     max_weight: float = 0.30, tilts: Optional[Dict[str, float]] = None,
     regime: Optional[str] = None, notes: Optional[List[str]] = None,
+    mix: Optional[Dict[str, float]] = None,
 ) -> Allocation:
+    """
+    Objectives: "risk_parity" and "min_variance" over all assets, or "mix": a
+    chosen stock/bond split of risk-parity sleeves plus a Bitcoin weight (``mix``).
+    """
     cov = returns.cov().to_numpy() * 252
     if objective == "min_variance":
         w = opt.min_variance(cov, max_weight)
     elif objective == "risk_parity":
         w = opt.risk_parity(cov)
+    elif objective == "mix":
+        if not mix:
+            raise ValueError("objective 'mix' needs a stock share")
+        w = mix_weights(returns, assets, mix["stocks"], mix.get("btc", 0.0)).to_numpy()
     else:
         raise ValueError(f"unknown objective {objective!r}")
     base = pd.Series(w, index=returns.columns)
@@ -137,8 +189,56 @@ def optimize(
         base=base, tilted=tilted,
         risk_share=pd.Series(opt.risk_contributions(tilted.to_numpy(), cov), index=returns.columns),
         stats={"base": opt.portfolio_stats(returns, base), "tilted": opt.portfolio_stats(returns, tilted)},
-        regime=regime, tilts=tilts or {}, notes=notes or [],
+        regime=regime, tilts=tilts or {}, notes=notes or [], mix=mix,
     )
+
+
+def drawdown_frontier(
+    returns: pd.DataFrame, assets: Dict[str, Asset], btc: float = 0.03,
+    stock_shares=tuple(np.round(np.arange(1.0, 0.25, -0.05), 2)),
+) -> pd.DataFrame:
+    """
+    Mixes from all-stocks down to mostly bonds, with each one's actual weights
+    and historical volatility, return and maximum drawdown.
+    """
+    rows = []
+    for share in stock_shares:
+        w = mix_weights(returns, assets, float(share), btc)
+        cls = class_summary(w, w, assets)["weight"]
+        rows.append({"stocks": float(share), **{f"weight_{c}": float(cls.get(c, 0.0)) for c in CLASSES},
+                     **opt.portfolio_stats(returns, w)})
+    return pd.DataFrame(rows)
+
+
+def choose_for_drawdown(frontier: pd.DataFrame, limit: float) -> Tuple[pd.Series, bool]:
+    """
+    Most stock-heavy mix whose historical maximum drawdown stays within ``limit``
+    (e.g. 0.25 for -25%). Falls back to the least risky one, flagged False.
+    """
+    ok = frontier[frontier["max_drawdown"] >= -abs(limit)]
+    if ok.empty:
+        return frontier.loc[frontier["stocks"].idxmin()], False
+    return ok.loc[ok["stocks"].idxmax()], True
+
+
+def long_history_drawdown(
+    fred, industries: pd.DataFrame, market: pd.Series, weights: pd.Series, assets: Dict[str, Asset],
+    start: date = date(1990, 1, 2),
+) -> Dict[str, object]:
+    """
+    Maximum drawdown of the same equity and bond weights over the longest history
+    available (Bitcoin left out and the rest renormalized), so the check covers
+    the 2000-02 and 2008 bear markets the 10-year window misses.
+    """
+    end = industries.index[-1].date()
+    returns, _ = build_universe(fred, industries, market, start, end, include_btc=False)
+    w = weights.reindex(returns.columns).fillna(0.0)
+    w = w / w.sum()
+    r = returns @ w
+    growth = (1 + r).cumprod()
+    dd = growth / growth.cummax() - 1
+    return {"max_drawdown": float(dd.min()), "trough": dd.idxmin().date(),
+            "start": returns.index[0].date(), "end": returns.index[-1].date()}
 
 
 def to_portfolio_csv(alloc: Allocation, value: float, path: str | Path) -> None:

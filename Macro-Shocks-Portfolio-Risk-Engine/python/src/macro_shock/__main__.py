@@ -24,6 +24,7 @@ Examples:
   python -m macro_shock fomc-study --output fomc_events.csv   # Bitcoin vs FOMC (FRED)
   python -m macro_shock sector-study                          # sectors by regime
   python -m macro_shock optimize --output portfolio_optimized.csv
+  python -m macro_shock optimize --max-drawdown 0.25          # most equity risk within a -25% drawdown
   python -m macro_shock serve --port 8000
   python -m macro_shock health --env production
   python -m macro_shock demo --scenario weekend_crisis
@@ -401,7 +402,8 @@ def cmd_sector_study(args: argparse.Namespace) -> None:
 # Command: optimize
 # ──────────────────────────────────────────────────────────────
 
-OBJECTIVE_NAMES = {"risk_parity": "risk parity", "min_variance": "minimum variance"}
+OBJECTIVE_NAMES = {"risk_parity": "risk parity", "min_variance": "minimum variance",
+                   "mix": "stock/bond mix of risk-parity sleeves"}
 
 
 def cmd_optimize(args: argparse.Namespace) -> None:
@@ -422,13 +424,27 @@ def cmd_optimize(args: argparse.Namespace) -> None:
         start = end - pd.DateOffset(years=args.years)
         returns, assets = allocation.build_universe(
             fred, industries, market, start.date(), end.date(), include_btc=not args.no_bitcoin)
+        btc = 0.0 if args.no_bitcoin else args.btc_weight
+        if not 0 <= btc < 1:
+            raise ValueError("--btc-weight must be between 0 and 1")
+        objective, mix, frontier, pick, within = args.objective, None, None, None, True
+        if args.max_drawdown is not None:
+            frontier = allocation.drawdown_frontier(returns, assets, btc)
+            pick, within = allocation.choose_for_drawdown(frontier, args.max_drawdown)
+            mix, objective = {"stocks": float(pick["stocks"]), "btc": btc}, "mix"
+        elif args.stocks is not None:
+            if not 0 <= args.stocks <= 1:
+                raise ValueError("--stocks must be between 0 and 1 (share of the non-Bitcoin money)")
+            mix, objective = {"stocks": args.stocks, "btc": btc}, "mix"
+
         tilts, notes, regime = {}, [], None
         if args.tilt > 0:
             study = sector_study.run(fred, date(1990, 1, 1))
             regime = study.current_regime
             tilts = allocation.regime_tilts(study.sectors, regime, args.tilt)
             notes = allocation.style_notes(study.styles, regime)
-        alloc = allocation.optimize(returns, assets, args.objective, args.max_weight, tilts, regime, notes)
+        alloc = allocation.optimize(returns, assets, objective, args.max_weight, tilts, regime, notes, mix=mix)
+        long_run = allocation.long_history_drawdown(fred, industries, market, alloc.tilted, assets)
     except (DataFeedError, FrenchDataError, ValueError) as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -442,6 +458,16 @@ def cmd_optimize(args: argparse.Namespace) -> None:
     print(sep)
     if alloc.objective == "min_variance":
         print(f"  Max weight per asset: {args.max_weight:.0%}")
+    if frontier is not None:
+        print(f"\n  Stocks vs drawdown (limit {-abs(args.max_drawdown):.0%}); sectors and bonds each "
+              f"risk-parity within their sleeve:")
+        print(f"    {'Stocks':>7} {'Bonds':>6} {'BTC':>5} {'Vol':>6} {'Ret/yr':>7} {'Max DD':>7}")
+        for _, r in frontier.iterrows():
+            mark = "  <- chosen" if r["stocks"] == pick["stocks"] else ""
+            print(f"    {r['weight_equity']:>7.0%} {r['weight_bonds']:>6.0%} {r['weight_bitcoin']:>5.0%} "
+                  f"{r['volatility']:>6.1%} {r['annual_return']:>7.1%} {r['max_drawdown']:>7.1%}{mark}")
+        if not within:
+            print(f"  ⚠  No mix kept the drawdown within {-abs(args.max_drawdown):.0%}; showing the least risky one.")
     if regime:
         applied = ", ".join(f"{sector_study.sector_label(a)} {t:+.0%}" for a, t in alloc.tilts.items())
         print(f"  Current regime: {regime}  ->  tilts: {applied or 'none (no robust/consistent sector evidence)'}")
@@ -456,12 +482,22 @@ def cmd_optimize(args: argparse.Namespace) -> None:
         print(f"  {a.label:<26} {a.etf:<5} {alloc.base[code]:>7.1%} {alloc.tilted[code]:>8.1%} "
               f"{alloc.risk_share[code]:>11.1%}")
 
+    print(f"\n  {'Class':<10} {'Weight':>8} {'Risk share':>11}")
+    for cls, r in alloc.classes.iterrows():
+        print(f"  {cls:<10} {r['weight']:>8.1%} {r['risk_share']:>11.1%}")
+
     print(f"\n  {'':<10} {'Volatility':>11} {'Return/yr':>10} {'Max drawdown':>13}")
     for name in ("base", "tilted"):
         s = alloc.stats[name]
         print(f"  {name.capitalize():<10} {s['volatility']:>11.1%} {s['annual_return']:>10.1%} "
               f"{s['max_drawdown']:>13.1%}")
-    print("  Historical figures over the lookback window with daily rebalancing; not a forecast.")
+    print(f"\n  Longer history check, same stock/bond weights without Bitcoin, "
+          f"{long_run['start'].year}-{long_run['end'].year}:")
+    print(f"    max drawdown {long_run['max_drawdown']:.1%} (trough {long_run['trough']})")
+    if args.max_drawdown is not None and long_run["max_drawdown"] < -abs(args.max_drawdown):
+        print(f"    ⚠  Deeper than your {-abs(args.max_drawdown):.0%} limit: the {alloc.start.year}-"
+              f"{alloc.end.year} window had no crash like this one. Consider a lower --max-drawdown.")
+    print("  Historical figures with daily rebalancing; future drawdowns can be deeper. Not a forecast.")
     print(sep + "\n")
 
     allocation.to_portfolio_csv(alloc, args.value, args.output)
@@ -750,6 +786,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_opt.add_argument("--years", type=int, default=10, help="Lookback window in years")
     p_opt.add_argument("--max-weight", type=float, default=0.30, help="Per-asset cap (min_variance only)")
     p_opt.add_argument("--no-bitcoin", action="store_true", help="Leave Bitcoin out of the universe")
+    p_opt.add_argument("--max-drawdown", type=float, default=None,
+                       help="e.g. 0.25: pick the most stock-heavy mix whose historical drawdown stays "
+                            "within -25%%")
+    p_opt.add_argument("--stocks", type=float, default=None,
+                       help="Fixed share of the non-Bitcoin money in stocks (e.g. 0.7); bonds get the rest")
+    p_opt.add_argument("--btc-weight", type=float, default=0.03,
+                       help="Bitcoin weight with --max-drawdown or --stocks (default 3%%)")
     p_opt.add_argument("--tilt", type=float, default=0.25,
                        help="Regime tilt per evidence level: consistent +/-tilt, robust +/-2x tilt; 0 = off")
     p_opt.add_argument("--value", type=float, default=100000, help="Portfolio value for the output CSV")
