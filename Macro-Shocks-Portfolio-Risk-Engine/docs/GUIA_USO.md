@@ -71,6 +71,7 @@ Todos se ejecutan con `python -m macro_shock <comando>`. Añade `--help` a cualq
 | `optimize` | ¿Qué pesos dan el máximo de acciones dentro de mi tolerancia a caídas? | Mensual |
 | `fomc-study` | ¿Cómo reaccionaron bitcoin, la bolsa y el VIX a la Fed? | Ocasional |
 | `nowcast` | ¿Cuánto subirá el próximo IPC por la energía? | Antes de cada IPC |
+| `macro` | ¿Qué escenario macro descuenta el mercado? ¿Qué dicen los datos de crecimiento e inflación? ¿Qué sectores funcionan en ese cuadrante? | Semanal |
 
 ### 5.1 `daily` — informe diario
 
@@ -79,7 +80,7 @@ python -m macro_shock daily
 python -m macro_shock daily --quick     # sin el estudio sectorial (unos segundos)
 ```
 
-Muestra los datos del día, el **régimen**, las **alertas** frente a la ejecución anterior y la evidencia sectorial para el régimen. También muestra una línea de **energía** (WTI, Brent, gas natural Henry Hub, gasolina y diésel en surtidor, margen de refino) y, en la versión completa, la **estimación del próximo IPC** (sección 5.7). Guarda:
+Muestra los datos del día, el **régimen**, las **alertas** frente a la ejecución anterior y la evidencia sectorial para el régimen. También muestra una línea de **energía** (WTI, Brent, gas natural Henry Hub, gasolina y diésel en surtidor, margen de refino), una línea **`Macro`** con el escenario que descuenta el mercado (sección 5.8) y, en la versión completa, la **estimación del próximo IPC** (sección 5.7) y el **cuadrante macro**. Guarda:
 
 - `reports\daily_AAAA-MM-DD.txt`: el informe de ese día.
 - `reports\daily_log.csv`: una fila por día. Ábrelo con Excel para ver la evolución.
@@ -96,6 +97,7 @@ Ambos están en `.gitignore`.
 | `below its 52-week high` | El S&P 500 está un 10% o más por debajo de su máximo: es una corrección. |
 | `WTI crude up` / `Brent crude up` | El crudo subió un 15% o más en 30 días: presión sobre el IPC energético. Con `down`, alivio. |
 | `Gasoline, retail up` / `Diesel, retail up` | El surtidor subió un 10% o más en 30 días. Con `down`, alivio. |
+| `MACRO QUADRANT CHANGE` | Los datos de crecimiento e inflación pasaron a otro cuadrante (solo en la versión completa). Ejecuta `macro` para ver los sectores del nuevo cuadrante. |
 
 ### 5.2 `analyze` — analizar un evento
 
@@ -238,6 +240,51 @@ Estima el **IPC de EE. UU. del mes que todavía no se ha publicado** a partir de
 - El backtest usa meses completos de datos y la versión actual (revisada) del IPC; en tiempo real, el error es algo mayor.
 - **El PMI no se puede estimar así**: es una encuesta de S&P Global cuyos datos no son públicos. Su componente de precios de insumos suele moverse en la misma dirección que la energía, así que este nowcast sirve como pista, no como estimación del PMI.
 
+### 5.8 `macro` — escenario de mercado, crecimiento, inflación y cuadrante
+
+```powershell
+python -m macro_shock macro
+python -m macro_shock macro --quick       # sin el estudio de sectores por cuadrante
+python -m macro_shock macro --window 10   # movimientos de los últimos 10 días en lugar de 20
+```
+
+Responde las preguntas de un informe de riesgo multiactivo con datos de FRED, en cinco bloques:
+
+**1. Qué descuenta el mercado** (últimos 20 días hábiles). Mide el movimiento de 11 variables en **desviaciones típicas (`sd`)** respecto a su movimiento normal de los últimos 3 años y lo compara con los cuatro escenarios:
+
+| Escenario | Patrón que lo confirma |
+|---|---|
+| `reacceleration`: reaceleración con presión de costos | Suben el 2 años, la tasa real, el breakeven, el petróleo y la bolsa; el crédito se abarata |
+| `disinflation`: desinflación / aterrizaje ordenado | Bajan el 10 años, el breakeven y el petróleo; sube la bolsa; bajan el crédito y el VIX |
+| `supply_shock`: shock de oferta / inflación persistente | Suben el petróleo y el breakeven; la curva se empina; baja el Nasdaq; se encarece el crédito |
+| `growth_scare`: freno de crecimiento / liquidación | Bajan el 10 años y la tasa real; baja la bolsa; suben el crédito, el VIX y el dólar |
+
+- **`score`** (−1 a +1): cuánto encajan los movimientos con el patrón. `CONFIRMED` desde 0.35, `partial` desde 0.15, `invalidated` por debajo de −0.15.
+- **`confirms` / `contradicts`**: qué movimientos apoyan el escenario y cuáles lo contradicen.
+- **La descomposición del 10 años**: si sube por la **tasa real** (crecimiento o una Fed dura) o por el **breakeven** (miedo a la inflación).
+
+**2. Crecimiento: indicadores adelantados.** Peticiones de subsidio por desempleo, el índice económico semanal de la Fed de Nueva York (en % de crecimiento del PIB), GDPNow de la Fed de Atlanta, la **regla de Sahm** (≥ 0.5 = señal de recesión) y las **encuestas manufactureras de Filadelfia y Nueva York**. Estas encuestas salen antes del PMI flash: `PMI hint` indica si la actividad mejora o empeora, y `PMI input-price hint` si los precios pagados suben.
+
+**3. Inflación:** la línea del nowcast del IPC (sección 5.7).
+
+**4. Cuadrante macro**, solo con datos publicados:
+
+| | Inflación sube | Inflación baja |
+|---|---|---|
+| **Crecimiento sube** | `reacceleration` | `disinflation` |
+| **Crecimiento baja** | `supply_shock` (estanflación) | `growth_scare` (desaceleración) |
+
+- El **eje de crecimiento** combina peticiones de subsidio, producción industrial y empleo; el **eje de inflación**, el IPC general y el subyacente. Cada señal compara el ritmo de los últimos 3 meses con el del último año, en unidades de su tamaño típico.
+- **`with the October CPI nowcast`**: cómo quedaría el eje de inflación si el próximo IPC sale como estima el nowcast.
+- **`Markets vs data`**: `AGREE` si el mercado y los datos señalan el mismo escenario, la lectura más fuerte. `DISAGREE` si no: el mercado se anticipa, así que o los datos están a punto de girar o el mercado exagera.
+
+**5. Sectores y estilos por cuadrante desde 1972.** Igual que `sector-study`, pero con el cuadrante macro en lugar del régimen de riesgo, y solo los resultados `**` y `*`. La historia reconstruye el cuadrante con lo que se había publicado en cada fecha (con los retrasos de publicación de cada dato), así que no usa información del futuro.
+
+⚠️ **Limitaciones:**
+- El bloque 1 describe **lo que el mercado ya descuenta**, no lo que va a pasar.
+- **El oro y la plata no están**: FRED dejó de publicar sus precios en 2022.
+- El PMI de S&P Global y el ISM no son públicos: las encuestas regionales solo indican su dirección.
+
 ---
 
 ## 6. Problemas frecuentes
@@ -260,7 +307,7 @@ Estima el **IPC de EE. UU. del mes que todavía no se ha publicado** a partir de
   | Qué cambiar | Dónde |
   |---|---|
   | Series de FRED | `python/src/macro_shock/data/feed_provider.py` |
-  | Estudios (FOMC, sectores, regímenes, cartera, nowcast del IPC) | `python/src/macro_shock/research/` |
+  | Estudios (FOMC, sectores, regímenes, cartera, nowcast del IPC, escenario macro y cuadrante) | `python/src/macro_shock/research/` |
   | Escenarios y beta de bitcoin | `python/src/macro_shock/scenario_engine/scenario_tree.py` |
   | Comandos | `python/src/macro_shock/__main__.py` |
 

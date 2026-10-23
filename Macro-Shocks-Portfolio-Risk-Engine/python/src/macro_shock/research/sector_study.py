@@ -39,7 +39,17 @@ def sector_label(code: str) -> str:
     return f"{name} ({etf})" if etf != "-" else name
 
 
-def run(fred, start: date, horizon: int = 21, end: Optional[date] = None) -> SectorStudy:
+@dataclass
+class Universe:
+    industries: pd.DataFrame
+    factors: pd.DataFrame
+    momentum: pd.DataFrame
+    market: pd.Series
+    idx: pd.DatetimeIndex
+
+
+def universe(start: date, end: Optional[date] = None) -> Universe:
+    """French Data Library sectors, factors and momentum on their common trading days."""
     # "Other" is French's catch-all industry: no ETF tracks it, so it cannot be acted on
     industries = french.daily_returns(french.INDUSTRIES_12).drop(columns=["Other"], errors="ignore")
     factors = french.daily_returns(french.FACTORS_3)
@@ -50,16 +60,26 @@ def run(fred, start: date, horizon: int = 21, end: Optional[date] = None) -> Sec
         idx = idx[idx <= pd.Timestamp(end)]
     market = french.market_return(factors)
     idx = idx.intersection(market.index).intersection(momentum.index)
+    return Universe(industries, factors, momentum, market, idx)
 
+
+def label_tables(u: Universe, labels: pd.Series, horizon: int):
+    """(sectors, styles, split date): split_robustness() tables for any labelling of the window starts."""
+    split = u.idx[len(u.idx) // 2]
+    fwd, lab = sr.window_returns(u.industries.loc[u.idx], labels, u.market, horizon)
+    sectors = sr.split_robustness(fwd, lab, split)
+    style_daily = pd.concat([u.factors.loc[u.idx, ["SMB", "HML"]], u.momentum.loc[u.idx, ["Mom"]]], axis=1)
+    fwd, lab = sr.window_returns(style_daily, labels, None, horizon)
+    styles = sr.split_robustness(fwd, lab, split)
+    return sectors, styles, split
+
+
+def run(fred, start: date, horizon: int = 21, end: Optional[date] = None) -> SectorStudy:
+    u = universe(start, end)
+    idx = u.idx
     series = rh.fetch_series(fred, start, date.today())
     regimes = rh.regime_history(series, sr.window_starts(idx, horizon), "proxy")
-    split = idx[len(idx) // 2]
-
-    fwd, labels = sr.window_returns(industries.loc[idx], regimes, market, horizon)
-    sectors = sr.split_robustness(fwd, labels, split)
-    style_daily = pd.concat([factors.loc[idx, ["SMB", "HML"]], momentum.loc[idx, ["Mom"]]], axis=1)
-    fwd, labels = sr.window_returns(style_daily, regimes, None, horizon)
-    styles = sr.split_robustness(fwd, labels, split)
+    sectors, styles, split = label_tables(u, regimes, horizon)
 
     latest = max(series[k].index[-1] for k in ("vix", "y2", "y10", "hy", "ig") if len(series[k]))
     now_real = rh.regime_history(series, [latest], "ice").iloc[0]

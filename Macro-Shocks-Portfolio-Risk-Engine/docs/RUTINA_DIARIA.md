@@ -15,7 +15,8 @@ cd $HOME\Macro-Shocks-Portfolio-Risk-Engine\Macro-Shocks-Portfolio-Risk-Engine
 | **Cada día de mercado** | `daily --quick` | 1 min | Régimen y alertas |
 | **Días de evento** (Fed, BCE…) | `analyze ... --portfolio portfolio.csv --sectors --inflation` | 5 min | Riesgo del anuncio para tu cartera |
 | **Antes de cada IPC** (≈ día 10–15) | `nowcast` | 1 min | Qué inflación esperar y qué la empuja |
-| **Cada semana** (viernes) | `daily` (completo) | 2 min | Añade la evidencia sectorial del régimen |
+| **Antes del PMI flash** (≈ día 20–23) | `macro --quick` | 1 min | Dirección probable del PMI y de sus precios |
+| **Cada semana** (viernes) | `daily` (completo) y `macro` | 5 min | Evidencia sectorial del régimen, escenario macro y cuadrante |
 | **Cada mes** | `optimize --max-drawdown <tu límite>` | 3 min | Revisar los pesos objetivo |
 | **Cada trimestre** | `git pull`, tests, cambiar la clave | 10 min | Mantenimiento |
 
@@ -34,7 +35,7 @@ Los datos de FRED corresponden al **cierre del día hábil anterior**, así que 
 ### Paso 2: leer en este orden
 
 1. **`ALERTS`**: lo único que puede exigir hacer algo.
-2. **`Regime`**: el contexto.
+2. **`Regime`**: el contexto de riesgo. **`Macro`**: el escenario que descuenta el mercado.
 3. **Los datos**: 10Y, curva, crédito, VIX, S&P 500 y bitcoin, con el valor de la ejecución anterior.
 
 ### Paso 3: decidir
@@ -46,6 +47,7 @@ Los datos de FRED corresponden al **cierre del día hábil anterior**, así que 
 | `VIX up` o `HY spread up`, sin cambio de régimen | La tensión sube, pero aún no cambia el régimen | Vigila. Si hay un evento cerca, haz la prueba de estrés (sección 2) |
 | `below its 52-week high` | El S&P 500 está en corrección (−10% o peor) | Comprueba que tu cartera sigue dentro de tu límite de caída. **No vendas en pánico**: tras la tensión, el mes siguiente suele traer rebote (ver 1.2) |
 | `WTI crude up`, `Diesel, retail up`… | La energía se disparó en 30 días | Ejecuta `nowcast` para ver cuánto empuja al próximo IPC. Un shock de energía hace más probable una Fed dura |
+| `MACRO QUADRANT CHANGE` | Los datos de crecimiento e inflación cambiaron de cuadrante | Ejecuta `macro` y lee los sectores `**` y `*` del nuevo cuadrante. Es un cambio lento (datos mensuales): confírmalo durante varias semanas antes de actuar |
 
 ### 1.1 Si cambia el régimen
 
@@ -112,7 +114,17 @@ Ejecuta `daily` y compara lo que pasó (VIX, crédito, S&P 500) con lo que estim
 
 ---
 
-## 2.1 Antes de cada IPC (≈ día 10–15 del mes)
+## 2.1 Antes del PMI flash (≈ día 20–23 del mes)
+
+Las encuestas de la Fed de Nueva York (≈ día 15) y de Filadelfia (≈ tercer jueves) salen antes del PMI flash de S&P Global.
+
+```powershell
+python -m macro_shock macro --quick
+```
+
+Lee `PMI hint` (dirección de la actividad manufacturera) y `PMI input-price hint` (precios pagados). Si ambas encuestas empeoran a la vez y los precios pagados suben, el riesgo es el escenario `supply_shock`: actividad a la baja con costes al alza.
+
+## 2.2 Antes de cada IPC (≈ día 10–15 del mes)
 
 Fechas del IPC: [calendario del BLS](https://www.bls.gov/schedule/news_release/cpi.htm). Se publica a las **8:30, hora de Nueva York**.
 
@@ -131,7 +143,17 @@ python -m macro_shock nowcast
 python -m macro_shock daily
 ```
 
-La versión completa añade **la evidencia sectorial del régimen actual** y **la estimación del próximo IPC**. Además:
+La versión completa añade **la evidencia sectorial del régimen actual**, **la estimación del próximo IPC** y **el cuadrante macro**. Además:
+
+```powershell
+python -m macro_shock macro
+```
+
+1. **¿El mercado y los datos coinciden?** (`Markets vs data`). Si coinciden, la lectura es sólida. Si no, el mercado se está anticipando o exagerando: vigila si los datos le siguen las próximas semanas.
+2. **Lee los sectores `**` y `*` del cuadrante actual** (marcado con `<- current`) y compáralos con los del régimen de riesgo de `daily`. **Cuando el régimen y el cuadrante apoyan la misma inclinación, la evidencia es más fuerte.**
+3. **Mira la descomposición del 10 años**: si sube por la tasa real, presiona más a los activos de larga duración (Nasdaq, bitcoin) que si sube por el breakeven.
+
+Además:
 
 - Abre `reports\daily_log.csv` en Excel y crea un gráfico de `vix`, `hy_bps` y `vulnerability`, y otro de `wti`, `diesel_retail` y `crack_321` (margen de refino). **Las tendencias de varias semanas dicen más que un solo día.**
 - Si la `vulnerability` sube de forma sostenida hacia 0.65, el mercado se acerca a `risk_off_correction`.
