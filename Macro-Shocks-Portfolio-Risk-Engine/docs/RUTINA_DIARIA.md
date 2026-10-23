@@ -18,6 +18,7 @@ cd $HOME\Macro-Shocks-Portfolio-Risk-Engine\Macro-Shocks-Portfolio-Risk-Engine
 | **Antes de cada IPC** (≈ día 10–15) | `nowcast` | 1 min | Qué inflación esperar y qué la empuja |
 | **Antes del PMI flash** (≈ día 20–23) | `macro --quick` | 1 min | Dirección probable del PMI y de sus precios |
 | **Cada semana** (viernes) | `daily` (completo) y `macro` | 5 min | Evidencia sectorial del régimen, escenario macro y cuadrante |
+| **Si operas cripto** (diario) | `crypto` | 1 min | Apalancamiento, sentimiento, liquidez y régimen cripto |
 | **Cada mes** | `optimize --max-drawdown <tu límite>` | 3 min | Revisar los pesos objetivo |
 | **Cada trimestre** | `git pull`, tests, cambiar la clave | 10 min | Mantenimiento |
 

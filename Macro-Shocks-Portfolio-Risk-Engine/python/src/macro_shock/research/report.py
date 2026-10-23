@@ -24,7 +24,7 @@ import structlog
 
 from macro_shock.research import analogs as an
 from macro_shock.research import charts, cpi_nowcast, growth, macro, macro_scenario as ms, sector_study
-from macro_shock.research import french
+from macro_shock.research import crypto as cr, data_health, french, liquidity as lq
 
 logger = structlog.get_logger(__name__)
 
@@ -46,6 +46,9 @@ LEADING_ES = {"wei": "Índice económico semanal (Fed NY, % PIB)", "gdpnow": "GD
               "empire_prices": "Fed Nueva York: precios pagados"}
 SIGNAL_ES = {"claims": "Peticiones de subsidio", "indpro": "Producción industrial", "payrolls": "Empleo (nóminas)",
              "cpi": "IPC general", "core": "IPC subyacente"}
+LABEL_ES = {"headline": "IPC general", "core": "Subyacente (tendencia)", "food": "Alimentos (tendencia)",
+            "energy": "Energía", "gasoline": "Gasolina", "fuel_oil": "Fuel oil", "electricity": "Electricidad",
+            "utility_gas": "Gas por tubería"}
 MOVE_ES = {"y2": "Bono 2 años", "y10": "Bono 10 años", "real10": "Tasa real 10 años (TIPS)",
            "breakeven10": "Breakeven 10 años", "dollar": "Dólar (índice amplio)", "oil": "WTI", "equities": "S&P 500",
            "nasdaq": "Nasdaq", "credit": "Spread HY", "vix": "VIX", "curve": "Curva 2s10s"}
@@ -75,6 +78,10 @@ class Context:
     quadrant_study: Optional[sector_study.SectorStudy] = None
     analogs: Optional[an.Analogs] = None
     model: Optional[an.Model] = None
+    crypto: Optional[cr.CryptoView] = None
+    liq_series: Dict[str, pd.Series] = field(default_factory=dict)
+    liquidity: Optional[lq.Liquidity] = None
+    health: Optional[pd.DataFrame] = None
 
 
 def _try(ctx: Context, name: str, fn):
@@ -135,7 +142,25 @@ def gather(fred, today: Optional[date] = None, quick: bool = False) -> Context:
         ctx.btc = float(s.iloc[-1]) if len(s) else None
     _try(ctx, "bitcoin", bitcoin)
 
+    def crypto_axis():
+        data = cr.fetch()
+        quadrants = None
+        if ctx.sig is not None:
+            ends = pd.date_range("2017-01-01", ctx.today, freq="MS") - pd.Timedelta(days=1)
+            quadrants = growth.quadrant_history(ctx.sig, ends)
+        ctx.crypto = cr.analyze(data, ctx.market_series.get("nasdaq"), quadrants)
+    _try(ctx, "cripto", crypto_axis)
+
+    def fed_liquidity():
+        ctx.liq_series = lq.fetch(fred, ctx.today)
+        assets = {"Nasdaq": ctx.market_series.get("nasdaq")}
+        if ctx.crypto is not None:
+            assets["BTC"] = ctx.crypto.data.prices["BTC"].dropna()
+        ctx.liquidity = lq.assess(ctx.liq_series, assets)
+    _try(ctx, "liquidez", fed_liquidity)
+
     if quick:
+        ctx.health = health(ctx)
         return ctx
     ctx.regime_study = _try(ctx, "sectores por régimen", lambda: sector_study.run(fred, date(1990, 1, 1)))
     if ctx.sig is not None:
@@ -149,7 +174,26 @@ def gather(fred, today: Optional[date] = None, quick: bool = False) -> Context:
             ctx.analogs = an.analogs(df, today_state, mkt)
             ctx.model = an.model(df, today_state)
         _try(ctx, "análogos y modelo", history)
+    ctx.health = health(ctx)
     return ctx
+
+
+def health(ctx: Context) -> pd.DataFrame:
+    """Freshness of every series gathered (no extra downloads)."""
+    sources = {"FRED mercado": ctx.market_series, "FRED crecimiento": ctx.growth_series,
+               "FRED liquidez": ctx.liq_series}
+    if ctx.nowcast is not None:
+        sources["FRED energía"] = ctx.nowcast.prices
+    if ctx.crypto is not None:
+        d = ctx.crypto.data
+        sources["Cripto: precios Binance"] = {k: d.prices[k] for k in d.prices}
+        other = {"Fear & Greed": d.fear_greed, "Stablecoins (DefiLlama)": d.stablecoins}
+        other.update({f"Funding {k}": v for k, v in d.funding.items()})
+        other.update({k: pd.Series(dtype=float) for k in d.errors})          # failed sources
+        sources["Cripto: otras fuentes"] = other
+    if ctx.errors:                                  # whole sections that could not be built
+        sources["Secciones del informe"] = {name: pd.Series(dtype=float) for name in ctx.errors}
+    return data_health.check(sources, ctx.today)
 
 
 # ── Objective summary ────────────────────────────────────────────────────────
@@ -250,7 +294,7 @@ def executive(ctx: Context) -> List[str]:
         ann = cpi_nowcast.annualized(head["mm"])
         out.append(f"<b>Inflación:</b> IPC estimado de {mo.strftime('%m/%Y')} {head['mm']:+.2f}% m/m "
                    f"(rango {head['low']:+.2f} a {head['high']:+.2f}; {ann:+.1f}% anualizado frente al 2% de la Fed)"
-                   + (f"; la subpartida energética que más aporta es {t.loc[driver, 'label'].lower()} "
+                   + (f"; la subpartida energética que más aporta es {LABEL_ES.get(driver, driver).lower()} "
                       f"({t.loc[driver, 'contribution']:+.2f} pts)." if driver else "."))
     lead = ctx.leading
     if lead is not None:
@@ -288,6 +332,26 @@ def executive(ctx: Context) -> List[str]:
                        f"histórica, así que su previsión ({mdl.forecast:+.1f}% a 3 meses) no debe usarse</b>.")
     for line in convergence(ctx):
         out.append(f"<b>Sectores:</b> {escape(line)}.")
+    c = ctx.crypto
+    if c is not None and "BTC" in c.table.index:
+        b = c.table.loc["BTC"]
+        out.append(f"<b>Cripto:</b> régimen <b>{cr.REGIME_ES.get(c.regime, 'n/d')}</b> desde {c.regime_since}; BTC "
+                   f"{b['r30']:+.1f}% en 30 días, {b['dd_1y']:+.0f}% desde su máximo de 12 meses"
+                   + (f", correlación con el Nasdaq {b['corr_nasdaq']:+.2f}" if pd.notna(b["corr_nasdaq"]) else "")
+                   + (f". {len(c.alerts)} alerta(s): " + "; ".join(escape(a) for a in c.alerts[:3]) if c.alerts else
+                      ". Sin alertas de apalancamiento ni sentimiento") + ".")
+    lq_ = ctx.liquidity
+    if lq_ is not None:
+        exp = lq_.expect.iloc[-1] if len(lq_.expect) else None
+        out.append(f"<b>Liquidez de la Fed:</b> {lq_.net.iloc[-1] / 1000:,.2f} billones de dólares netos, "
+                   f"{_pct(lq_.change_13w, '+,.0f', ' mil millones')} en 13 semanas"
+                   + (f"; el mercado descuenta {'subidas' if exp > 15 else 'bajadas' if exp < -15 else 'tipos estables'} "
+                      f"(2 años − fed funds {exp:+.0f} pb)" if exp is not None else "") + ".")
+    h = ctx.health
+    if h is not None and len(h):
+        bad = h[h["status"] != "ok"]
+        out.append(f"<b>Datos:</b> {int((h['status'] == 'ok').sum())} de {len(h)} series al día"
+                   + (f"; revisar: {escape(', '.join(bad['series'].astype(str).head(6)))}" if len(bad) else "") + ".")
     return out
 
 
@@ -452,7 +516,7 @@ def section_energy(ctx: Context) -> str:
     if nc.months:
         mo = nc.months[0]
         t = nc.table[nc.table["month"] == mo]
-        rows = [[("&nbsp;&nbsp;" if r["item"] in cpi_nowcast.ITEMS else "") + escape(r["label"]),
+        rows = [[("&nbsp;&nbsp;" if r["item"] in cpi_nowcast.ITEMS else "") + escape(LABEL_ES.get(r["item"], r["label"])),
                  "" if pd.isna(r["weight"]) else f"{r['weight']:.0%}", _num(r["mm"], "+.2f", "%"),
                  "3m" if r["kind"] == "trend" else (f"{r['low']:+.2f} a {r['high']:+.2f}" if pd.notna(r["low"]) else ""),
                  _num(r["contribution"], "+.2f") if pd.notna(r["contribution"]) else "",
@@ -463,7 +527,7 @@ def section_energy(ctx: Context) -> str:
                 f'{_table(["Partida", "Peso", "m/m", "Rango 90%", "Aporte (pts)", "a/a"], rows)}</div>')
     stats = nc.stats
     if len(stats):
-        rows = [[escape(cpi_nowcast.CPI[k][1]), f"{stats.loc[k, 'mae']:.2f}%", f"{stats.loc[k, 'naive_mae']:.2f}%",
+        rows = [[escape(LABEL_ES.get(k, k)), f"{stats.loc[k, 'mae']:.2f}%", f"{stats.loc[k, 'naive_mae']:.2f}%",
                  f'<span class="tag {"ok" if stats.loc[k, "mae"] < stats.loc[k, "naive_mae"] else "no"}">'
                  f'{"sí" if stats.loc[k, "mae"] < stats.loc[k, "naive_mae"] else "no"}</span>']
                 for k in (*cpi_nowcast.ITEMS, "energy", "headline") if k in stats.index]
@@ -551,6 +615,90 @@ def section_history(ctx: Context) -> str:
     return out
 
 
+def section_crypto(ctx: Context) -> str:
+    c = ctx.crypto
+    if c is None:
+        return _missing(ctx, "cripto")
+    d, t = c.data, c.table
+    cards = [_kpi("Régimen cripto", escape(cr.REGIME_ES.get(c.regime, "n/d")) + f'<br><span class="muted">desde {c.regime_since}</span>')]
+    if d.dominance:
+        cards.append(_kpi("Dominancia BTC", f"{d.dominance['btc']:.1f}%"))
+    if len(d.fear_greed):
+        cards.append(_kpi("Fear & Greed (0–100)", f"{d.fear_greed.iloc[-1]:.0f}"))
+    if len(d.stablecoins):
+        cards.append(_kpi("Stablecoins", f"{d.stablecoins.iloc[-1] / 1e9:,.0f} mil M$ "
+                          f"<span class='{_cls(cr._ret(d.stablecoins, 30))}'>{cr._ret(d.stablecoins, 30):+.1f}% 30d</span>"))
+    rows = [[f"<b>{escape(sym)}</b> <span class='muted'>{escape(r['segment'])}</span>",
+             f"{r['price']:,.4g}", _num(r["r7"], "+.1f", "%"), _num(r["r30"], "+.1f", "%"), _num(r["r90"], "+.1f", "%"),
+             _num(r["r365"], "+.0f", "%"), f"{r['vol30']:.0f}%", _num(r["dd_1y"], "+.0f", "%"),
+             "" if pd.isna(r["beta_btc"]) else f"{r['beta_btc']:.2f}", _num(r["corr_nasdaq"], "+.2f"),
+             _num(r["funding"], "+.0f", "%"), _num(r["oi_30d"], "+.0f", "%")] for sym, r in t.iterrows()]
+    table = _table(["Moneda", "Precio $", "7d", "30d", "90d", "1 año", "Vol. 30d", "vs máx. 1a", "Beta BTC",
+                    "Corr. Nasdaq", "Funding anual", "Interés abierto 30d"], rows)
+    al = "".join(f"<li>{escape(a)}</li>" for a in c.alerts) or "<li>Sin alertas.</li>"
+
+    def ev(tab, label, title):
+        s = cr.supported(tab, label)
+        if s.empty:
+            return f'<div class="card"><h3>{escape(title)}</h3><p>Ningún resultado robusto: la evidencia no apoya inclinaciones.</p></div>'
+        body = [[escape(f"{'**' if r['evidence'] == 'robust' else '*'} {r['asset']}"), _num(r["mean_pct"], "+.2f", "%"),
+                 f"{r['hit_rate']:.0%}", f"{r['ci_low']:+.2f} a {r['ci_high']:+.2f}", str(int(r["n"]))] for _, r in s.iterrows()]
+        return f'<div class="card"><h3>{escape(title)}</h3>{_table(["Moneda", "Media 30d", "Acierto", "IC 95%", "Ventanas"], body)}</div>'
+    q = ctx.axes.quadrant if ctx.axes else None
+    p = d.prices[d.prices.index > d.prices.index[-1] - pd.Timedelta(days=365)]
+    base = lambda x: x.dropna() / x.dropna().iloc[0] * 100 if len(x.dropna()) else x
+    perf = charts.line_chart({k: base(p[k]) for k in ("BTC", "ETH", "SOL", "AAVE", "ONDO") if k in p},
+                             "Rendimiento 1 año (base 100)")
+    fg = charts.line_chart({"Fear & Greed": _last_years(d.fear_greed, 1)}, "Sentimiento (0 miedo – 100 codicia)") if len(d.fear_greed) else ""
+    st = charts.line_chart({"Stablecoins": _last_years(d.stablecoins / 1e9, 2)}, "Oferta de stablecoins (miles de millones $)") if len(d.stablecoins) else ""
+    fund = ""
+    if "BTC" in d.funding:
+        f = d.funding["BTC"]
+        fund = charts.line_chart({"BTC": f.groupby(f.index.normalize()).mean() * 3 * 365 * 100},
+                                 "Funding de BTC (% anualizado)", zero=True, note="> 30%: largos en exceso")
+    errs = (f'<p class="muted">Fuentes no disponibles: {escape("; ".join(sorted(d.errors)))}</p>' if d.errors else "")
+    return (f'<div class="kpis">{"".join(cards)}</div><div class="card">{table}{errs}</div>'
+            f'<div class="card"><h3>Alertas cripto</h3><ul>{al}</ul></div>'
+            f'<div class="grid2">{ev(c.by_regime, c.regime, f"Frente a BTC, 30 días, en régimen {cr.REGIME_ES.get(c.regime, chr(45))}")}'
+            f'{ev(c.by_quadrant, q, f"BTC y ETH, 30 días, en cuadrante {QUAD_ES.get(q, chr(45))}")}</div>'
+            f'<div class="grid2">{perf}{fg}{st}{fund}</div>')
+
+
+def section_liquidity(ctx: Context) -> str:
+    l = ctx.liquidity
+    if l is None:
+        return _missing(ctx, "liquidez")
+    exp = l.expect.iloc[-1] if len(l.expect) else None
+    cards = [_kpi("Liquidez neta Fed", f"{l.net.iloc[-1] / 1000:,.2f} billones $"),
+             _kpi("Cambio 4 semanas", _num(l.change_4w, "+,.0f", " mil M$")),
+             _kpi("Cambio 13 semanas", _num(l.change_13w, "+,.0f", " mil M$")),
+             _kpi("2 años − fed funds", _num(exp, "+.0f", " pb"))]
+    links = "".join(f"<li>{escape(k)}: correlación {v:+.2f}</li>" for k, v in l.links.items())
+    return (f'<div class="kpis">{"".join(cards)}</div>'
+            + (f'<div class="card"><h3>Relación con la liquidez (cambios de 13 semanas, 6 años)</h3><ul>{links}</ul>'
+               '<p class="muted">Cerca de 0: la liquidez apenas explica ese activo en este periodo.</p></div>' if links else "")
+            + '<div class="grid2">' + charts.line_chart({"Liquidez neta": l.net / 1000}, "Liquidez neta de la Fed (billones $)",
+                                                        note="balance − cuenta del Tesoro − repos inversos")
+            + charts.line_chart({"2 años − fed funds": _last_years(l.expect, 3)}, "Expectativas de tipos (pb)", zero=True,
+                                note="> 0 subidas, < 0 bajadas") + "</div>")
+
+
+def section_health(ctx: Context) -> str:
+    h = ctx.health
+    if h is None or h.empty:
+        return '<p class="muted">Sin información.</p>'
+    status = {"ok": '<span class="tag ok">al día</span>', "stale": '<span class="tag no">desactualizada</span>',
+              "failed": '<span class="tag no">falló</span>'}
+    rows = [[escape(str(r["source"])), escape(str(r["series"])), str(r["last"] or "—"),
+             "" if r["age"] is None or pd.isna(r["age"]) else str(int(r["age"])), escape(r["freq"]), status[r["status"]]]
+            for _, r in h.iterrows()]
+    bad = int((h["status"] != "ok").sum())
+    head = (f"<p><b>{len(h) - bad} de {len(h)}</b> series al día" + (f"; <b>{bad}</b> con problemas (arriba en la tabla)." if bad else ".")
+            + "</p>")
+    return (f'<div class="card">{head}<details{" open" if bad else ""}><summary>Ver todas las series</summary>'
+            f'{_table(["Fuente", "Serie", "Último dato", "Días", "Frecuencia", "Estado"], rows)}</details></div>')
+
+
 def render(ctx: Context) -> str:
     gen = datetime.now().strftime("%d/%m/%Y %H:%M")
     bullets = "".join(f"<li>{b}</li>" for b in executive(ctx))
@@ -564,6 +712,9 @@ def render(ctx: Context) -> str:
          else '<p class="muted">Omitida (--quick).</p>'),
         ("6. Análogos históricos y modelo predictivo", section_history(ctx) if "análogos y modelo" in ctx.errors or ctx.analogs
          else '<p class="muted">Omitida (--quick).</p>'),
+        ("7. Cripto", section_crypto(ctx)),
+        ("8. Liquidez de la Fed", section_liquidity(ctx)),
+        ("9. Salud de los datos", section_health(ctx)),
     ]
     body = "".join(f"<h2>{escape(t)}</h2>{s}" for t, s in sections)
     return f"""<!doctype html>

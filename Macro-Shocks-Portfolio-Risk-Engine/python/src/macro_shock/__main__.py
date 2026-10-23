@@ -558,6 +558,43 @@ def cmd_macro(args: argparse.Namespace) -> None:
 
 
 # ──────────────────────────────────────────────────────────────
+# Command: crypto
+# ──────────────────────────────────────────────────────────────
+
+def cmd_crypto(args: argparse.Namespace) -> None:
+    """Crypto axis: ten coins, leverage, sentiment, liquidity, regime evidence; Fed liquidity if FRED is set."""
+    from datetime import date
+
+    import pandas as pd
+
+    from macro_shock.data.feed_provider import fred_client
+    from macro_shock.research import crypto, growth, liquidity, macro_scenario
+
+    try:
+        data = crypto.fetch()
+    except Exception as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    nasdaq, quadrants, quadrant, liq = None, None, None, None
+    try:
+        fred = fred_client()
+        today = date.today()
+        nasdaq = macro_scenario.fetch(fred, today).get("nasdaq")
+        series = growth.fetch(fred, growth.FULL_HISTORY_START, today)
+        sig = growth.signals(series)
+        quadrant = growth.axes_at(sig, today, lagged=False).quadrant
+        quadrants = growth.quadrant_history(sig, pd.date_range("2017-01-01", today, freq="MS") - pd.Timedelta(days=1))
+        liq = liquidity.assess(liquidity.fetch(fred, today), {"Nasdaq": nasdaq, "BTC": data.prices["BTC"].dropna()})
+    except Exception as e:
+        print(f"(FRED part skipped: {e})")
+    view = crypto.analyze(data, nasdaq, quadrants)
+    lines = crypto.report_lines(view, quadrant)
+    if liq is not None:
+        lines = lines[:-1] + [""] + liquidity.lines(liq) + lines[-1:]
+    print("\n" + "\n".join(lines) + "\n")
+
+
+# ──────────────────────────────────────────────────────────────
 # Command: report
 # ──────────────────────────────────────────────────────────────
 
@@ -1012,6 +1049,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Skip the sectors-by-quadrant study (no French Data Library download)")
     p_mac.add_argument("--start", default="1972-01-01", help="First date of the sectors-by-quadrant study")
     p_mac.set_defaults(func=cmd_macro)
+
+    p_cry = sub.add_parser("crypto", help="Crypto axis: 10 coins, funding, sentiment, stablecoins, regime evidence "
+                                          "(public APIs, no key; FRED optional)")
+    p_cry.set_defaults(func=cmd_crypto)
 
     p_rep = sub.add_parser("report", help="Executive HTML report with charts, analogs and a tested model "
                                           "(needs FRED_API_KEY)")

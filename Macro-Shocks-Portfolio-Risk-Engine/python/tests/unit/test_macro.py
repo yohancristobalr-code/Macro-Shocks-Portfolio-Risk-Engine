@@ -225,12 +225,13 @@ def macro_series(end=TODAY):
     surveys = {"philly_activity": (5.0, -3.0), "philly_orders": (4.0, 2.0), "philly_prices": (30.0, 38.0),
                "empire_activity": (-2.0, 1.0), "empire_orders": (0.0, 3.0), "empire_prices": (25.0, 31.0)}
     for key, values in surveys.items():
-        data[growth.SERIES[key][0]] = pd.Series(values, months[-3:-1])
+        data[growth.SERIES[key][0].split("|")[-1]] = pd.Series(values, months[-3:-1])   # last candidate: fallback works
     return data
 
 
 def growth_by_key(data):
-    return {k: data.get(sid, pd.Series(dtype=float, index=pd.DatetimeIndex([]))) for k, (sid, _) in growth.SERIES.items()}
+    pick = lambda ids: next((data[i] for i in ids.split("|") if i in data), pd.Series(dtype=float, index=pd.DatetimeIndex([])))
+    return {k: pick(ids) for k, (ids, _) in growth.SERIES.items()}
 
 
 @pytest.fixture(scope="module")
