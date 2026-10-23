@@ -70,6 +70,7 @@ Todos se ejecutan con `python -m macro_shock <comando>`. Añade `--help` a cualq
 | `sector-study` | ¿Qué sectores y estilos funcionaron históricamente en cada régimen? | Semanal |
 | `optimize` | ¿Qué pesos dan el máximo de acciones dentro de mi tolerancia a caídas? | Mensual |
 | `fomc-study` | ¿Cómo reaccionaron bitcoin, la bolsa y el VIX a la Fed? | Ocasional |
+| `nowcast` | ¿Cuánto subirá el próximo IPC por la energía? | Antes de cada IPC |
 
 ### 5.1 `daily` — informe diario
 
@@ -78,7 +79,7 @@ python -m macro_shock daily
 python -m macro_shock daily --quick     # sin el estudio sectorial (unos segundos)
 ```
 
-Muestra los datos del día, el **régimen**, las **alertas** frente a la ejecución anterior y la evidencia sectorial para el régimen. Guarda:
+Muestra los datos del día, el **régimen**, las **alertas** frente a la ejecución anterior y la evidencia sectorial para el régimen. También muestra una línea de **energía** (WTI, Brent, gas natural Henry Hub, gasolina y diésel en surtidor, margen de refino) y, en la versión completa, la **estimación del próximo IPC** (sección 5.7). Guarda:
 
 - `reports\daily_AAAA-MM-DD.txt`: el informe de ese día.
 - `reports\daily_log.csv`: una fila por día. Ábrelo con Excel para ver la evolución.
@@ -93,6 +94,8 @@ Ambos están en `.gitignore`.
 | `VIX up` | El VIX subió 5 puntos o más. La tensión aumenta rápidamente. |
 | `HY spread up` | El crédito de alto rendimiento se encareció 50 pb o más. Hay estrés en el crédito. |
 | `below its 52-week high` | El S&P 500 está un 10% o más por debajo de su máximo: es una corrección. |
+| `WTI crude up` / `Brent crude up` | El crudo subió un 15% o más en 30 días: presión sobre el IPC energético. Con `down`, alivio. |
+| `Gasoline, retail up` / `Diesel, retail up` | El surtidor subió un 10% o más en 30 días. Con `down`, alivio. |
 
 ### 5.2 `analyze` — analizar un evento
 
@@ -106,6 +109,7 @@ python -m macro_shock analyze --title "FOMC" --institution "Federal Reserve" --e
 | `--text` | El texto del comunicado, **en inglés**. |
 | `--portfolio portfolio.csv` | Añade la prueba de estrés de tu cartera. |
 | `--sectors` | Añade la evidencia sectorial para el régimen detectado. |
+| `--inflation` | Compara el tono del comunicado con la estimación del IPC a partir de la energía. |
 
 **Cómo leerlo:**
 
@@ -122,6 +126,7 @@ python -m macro_shock analyze --title "FOMC" --institution "Federal Reserve" --e
 
 - **`Reliability: LOW`** es normal con FRED: cubre 5 de los 8 tipos de datos de mercado (no tiene amplitud de mercado, divisas ni materias primas).
 - **`YOUR PORTFOLIO`**: ganancia o pérdida esperada, la del peor 5% de los casos, y qué posiciones pierden más en el peor escenario.
+- **`INFLATION CROSS-CHECK`** (con `--inflation`): `CONSISTENT` si un tono duro coincide con una inflación estimada por encima del 2% anualizado (o un tono suave, por debajo), lo que hace la lectura más creíble. `CONTRADICTS` si no coinciden: desconfía de la lectura y vigila el bono a 2 años. Si la inflación estimada está cerca del 2% (entre 1% y 3% anualizado) o el tono es `neutral`, no confirma nada.
 - **`Bitcoin`**: estimado como **1.0 × el movimiento de la bolsa** (1.16 × en los escenarios extremos). Son las betas medidas con datos de FRED de 2021–2025 (1.04 y 1.16).
 
 ### 5.3 Tu cartera: `portfolio.csv`
@@ -198,6 +203,41 @@ Mide cómo se movieron bitcoin, el S&P 500 y el VIX en los anuncios de la Fed de
 
 ⚠️ **Las fechas de la Fed llegan hasta diciembre de 2025.** Para añadir reuniones nuevas, edita `FOMC_ANNOUNCEMENTS` en `python/src/macro_shock/research/fomc_study.py`, con las fechas de [la web de la Fed](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm). La línea `Date check` confirmará que coinciden con los cambios de tipos en FRED.
 
+### 5.7 `nowcast` — el próximo IPC a partir de la energía
+
+```powershell
+python -m macro_shock nowcast
+python -m macro_shock nowcast --output nowcast_backtest.csv    # guarda el backtest mes a mes para Excel
+```
+
+Estima el **IPC de EE. UU. del mes que todavía no se ha publicado** a partir de los precios diarios y semanales de la energía en FRED, subpartida por subpartida:
+
+| Subpartida del IPC | Qué la mueve |
+|---|---|
+| Gasolina | Precio de la gasolina en surtidor (semanal) |
+| Fuel oil | Precio del diésel en surtidor, este mes y el anterior |
+| Electricidad | Gas natural Henry Hub, con 1–3 meses de retraso |
+| Gas por tubería | Gas natural Henry Hub, este mes y los 2 anteriores |
+
+1. Cada subpartida se estima con una regresión sobre la historia desde los años 90, con efectos por mes del año, porque el IPC está desestacionalizado y los precios no.
+2. **Energía** = las subpartidas ponderadas por su peso real dentro del IPC energético, y **IPC general** = subyacente + alimentos + energía con sus pesos. Los pesos se miden con los últimos 5 años del IPC publicado, sin introducirlos a mano.
+3. La subyacente y los alimentos no tienen precios diarios: entran con su **media de los últimos 3 meses**.
+
+**Cómo leerlo:**
+
+- **`m/m`**: variación mensual estimada. **`90% range`**: el rango donde cayó el 90% de los errores del backtest.
+- **`share`**: peso de la subpartida dentro de la energía, o de cada bloque dentro del IPC general.
+- **`to headline`**: cuántos puntos aporta cada subpartida al IPC general. Es la forma de ver **qué está empujando la inflación**.
+- **`y/y`**: variación interanual. Sale `n/a` si FRED no tiene el dato de hace un año: es el caso de octubre de 2026, porque el IPC de octubre de 2025 no se publicó por el cierre del gobierno de EE. UU.
+- **`(81% of the month observed)`**: qué parte del mes tiene datos. El resto se rellena con el último precio, así que a principios de mes la estimación es más incierta que el rango.
+- **`Energy prices`**: último precio, media del mes frente a la del mes anterior y variación en un año. El **margen de refino 3-2-1** es lo que gana una refinería por convertir 3 barriles de crudo en 2 de gasolina y 1 de diésel: si sube, el surtidor sube más que el crudo.
+- **`Backtest since 2010`**: el error medio de cada estimación, comparado con una estimación ingenua (la media histórica; para el IPC general, la media de los últimos 3 meses). Si alguna línea dice `NO`, **no te fíes de esa subpartida**.
+
+⚠️ **Limitaciones:**
+- Es un nowcast **energético**: la subyacente se supone igual a su tendencia, así que una sorpresa en la subyacente no la capta.
+- El backtest usa meses completos de datos y la versión actual (revisada) del IPC; en tiempo real, el error es algo mayor.
+- **El PMI no se puede estimar así**: es una encuesta de S&P Global cuyos datos no son públicos. Su componente de precios de insumos suele moverse en la misma dirección que la energía, así que este nowcast sirve como pista, no como estimación del PMI.
+
 ---
 
 ## 6. Problemas frecuentes
@@ -220,7 +260,7 @@ Mide cómo se movieron bitcoin, el S&P 500 y el VIX en los anuncios de la Fed de
   | Qué cambiar | Dónde |
   |---|---|
   | Series de FRED | `python/src/macro_shock/data/feed_provider.py` |
-  | Estudios (FOMC, sectores, regímenes, cartera) | `python/src/macro_shock/research/` |
+  | Estudios (FOMC, sectores, regímenes, cartera, nowcast del IPC) | `python/src/macro_shock/research/` |
   | Escenarios y beta de bitcoin | `python/src/macro_shock/scenario_engine/scenario_tree.py` |
   | Comandos | `python/src/macro_shock/__main__.py` |
 

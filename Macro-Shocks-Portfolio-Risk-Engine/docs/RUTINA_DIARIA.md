@@ -13,7 +13,8 @@ cd $HOME\Macro-Shocks-Portfolio-Risk-Engine\Macro-Shocks-Portfolio-Risk-Engine
 | Cuándo | Comando | Tiempo | Para qué |
 |---|---|---|---|
 | **Cada día de mercado** | `daily --quick` | 1 min | Régimen y alertas |
-| **Días de evento** (Fed, BCE…) | `analyze ... --portfolio portfolio.csv --sectors` | 5 min | Riesgo del anuncio para tu cartera |
+| **Días de evento** (Fed, BCE…) | `analyze ... --portfolio portfolio.csv --sectors --inflation` | 5 min | Riesgo del anuncio para tu cartera |
+| **Antes de cada IPC** (≈ día 10–15) | `nowcast` | 1 min | Qué inflación esperar y qué la empuja |
 | **Cada semana** (viernes) | `daily` (completo) | 2 min | Añade la evidencia sectorial del régimen |
 | **Cada mes** | `optimize --max-drawdown <tu límite>` | 3 min | Revisar los pesos objetivo |
 | **Cada trimestre** | `git pull`, tests, cambiar la clave | 10 min | Mantenimiento |
@@ -44,6 +45,7 @@ Los datos de FRED corresponden al **cierre del día hábil anterior**, así que 
 | `REGIME CHANGE` | El mercado pasó a otro estado de vulnerabilidad | Sigue la lista de pasos del informe (sección 1.1) |
 | `VIX up` o `HY spread up`, sin cambio de régimen | La tensión sube, pero aún no cambia el régimen | Vigila. Si hay un evento cerca, haz la prueba de estrés (sección 2) |
 | `below its 52-week high` | El S&P 500 está en corrección (−10% o peor) | Comprueba que tu cartera sigue dentro de tu límite de caída. **No vendas en pánico**: tras la tensión, el mes siguiente suele traer rebote (ver 1.2) |
+| `WTI crude up`, `Diesel, retail up`… | La energía se disparó en 30 días | Ejecuta `nowcast` para ver cuánto empuja al próximo IPC. Un shock de energía hace más probable una Fed dura |
 
 ### 1.1 Si cambia el régimen
 
@@ -56,14 +58,16 @@ Los datos de FRED corresponden al **cierre del día hábil anterior**, así que 
 
 Con los datos de FRED, el motor distingue cuatro regímenes. El de **crisis** es posible gracias a los índices de estrés financiero de la Fed (`STLFSI4` y `NFCI`), que aportan los componentes de liquidez y financiación.
 
-| Régimen | Mercado | Evidencia histórica desde 1990 (ejecución de octubre de 2026, antes de los índices de estrés) |
+| Régimen | Mercado | Evidencia histórica desde 1990 (ejecución del 22 de octubre de 2026) |
 |---|---|---|
-| `risk_on_expansion` | Tranquilo: VIX bajo, crédito barato | Momentum `*` favorecido; pequeñas empresas y consumo duradero `*` rezagados |
+| `risk_on_expansion` | Tranquilo: VIX bajo, crédito barato | Value `*` y momentum `*` favorecidos; consumo duradero, retail y pequeñas empresas `*` rezagados |
 | `fragile_risk_on` | Calma aparente, con algo de tensión | **Momentum `**` favorecido** (el único resultado robusto); telecom `*` rezagado |
-| `risk_off_correction` | Tensión: VIX alto y/o crédito caro | Tecnología `*` favorecida y eléctricas `*` rezagadas el mes siguiente: **efecto rebote**. El momentum pierde su ventaja |
-| `crisis` | Pánico: VIX extremo, crédito muy caro y estrés financiero en máximos históricos | Ver `sector-study`: hay pocos periodos (2008, 2020), así que la evidencia será escasa |
+| `risk_off_correction` | Tensión: VIX alto y/o crédito caro | Ningún resultado claro |
+| `crisis` | Pánico: VIX extremo, crédito muy caro y estrés financiero en máximos históricos (2008, 2020) | Tecnología `*` favorecida (rebote); consumo básico y materiales `*` rezagados; **momentum `*` muy negativo (−3.6% al mes)** |
 
-Esta tabla es una foto de octubre de 2026. **La referencia actualizada es siempre la salida de `sector-study`**, que se recalcula con cada ejecución. Desde que el motor usa los índices de estrés, los regímenes históricos se reclasifican y los resultados pueden cambiar.
+⚠️ **Regla del momentum:** la inclinación hacia momentum es la mejor apuesta en `fragile_risk_on`, pero **en una crisis el momentum se hunde**. Tras un pánico, las acciones que más cayeron son las que más rebotan. **Si el régimen pasa a `crisis`, retira la inclinación hacia momentum.** Con solo 29 meses de crisis desde 1990, es un resultado `*` (coherente), no definitivo.
+
+Esta tabla es una foto de octubre de 2026. **La referencia actualizada es siempre la salida de `sector-study`**, que se recalcula con cada ejecución.
 
 ---
 
@@ -87,8 +91,10 @@ Usa `-05:00` en invierno y `-04:00` en verano. Compara el **"Worst 5% case"** de
 Copia el texto del comunicado (en inglés) de la web de la Fed y ejecuta:
 
 ```powershell
-python -m macro_shock analyze --title "FOMC" --institution "Federal Reserve" --event-time "<fecha>T14:00:00-05:00" --data fred --text "<TEXTO>" --portfolio portfolio.csv --sectors
+python -m macro_shock analyze --title "FOMC" --institution "Federal Reserve" --event-time "<fecha>T14:00:00-05:00" --data fred --text "<TEXTO>" --portfolio portfolio.csv --sectors --inflation
 ```
+
+`--inflation` añade el **contraste con la inflación**: si el tono del comunicado coincide con lo que dice la energía (`CONSISTENT`), la lectura es más creíble; si no coincide (`CONTRADICTS`), desconfía de ella y vigila el bono a 2 años.
 
 | Puntaje | Acción del motor | Interpretación práctica |
 |---|---|---|
@@ -106,15 +112,28 @@ Ejecuta `daily` y compara lo que pasó (VIX, crédito, S&P 500) con lo que estim
 
 ---
 
+## 2.1 Antes de cada IPC (≈ día 10–15 del mes)
+
+Fechas del IPC: [calendario del BLS](https://www.bls.gov/schedule/news_release/cpi.htm). Se publica a las **8:30, hora de Nueva York**.
+
+```powershell
+python -m macro_shock nowcast
+```
+
+1. **Mira el IPC general estimado y su rango.** Si el dato publicado sale fuera del rango, hay una sorpresa real (casi siempre de la subyacente, que el motor no estima).
+2. **Mira `to headline`**: qué subpartida aporta más. En un shock de energía, la gasolina domina; si es la electricidad o el gas, el efecto dura más, porque esas tarifas se ajustan con meses de retraso.
+3. **Compara con el consenso** de cualquier calendario económico. Una estimación por encima del consenso apunta a un dato duro: más presión sobre los bonos y sobre los activos de larga duración (Nasdaq, bitcoin).
+4. **El día del dato:** compara el dato publicado con la estimación. Con el tiempo sabrás cuánto acierta en tiempo real.
+
 ## 3. Cada semana (viernes)
 
 ```powershell
 python -m macro_shock daily
 ```
 
-La versión completa añade **la evidencia sectorial del régimen actual**. Además:
+La versión completa añade **la evidencia sectorial del régimen actual** y **la estimación del próximo IPC**. Además:
 
-- Abre `reports\daily_log.csv` en Excel y crea un gráfico de `vix`, `hy_bps` y `vulnerability`. **Las tendencias de varias semanas dicen más que un solo día.**
+- Abre `reports\daily_log.csv` en Excel y crea un gráfico de `vix`, `hy_bps` y `vulnerability`, y otro de `wti`, `diesel_retail` y `crack_321` (margen de refino). **Las tendencias de varias semanas dicen más que un solo día.**
 - Si la `vulnerability` sube de forma sostenida hacia 0.65, el mercado se acerca a `risk_off_correction`.
 
 ## 4. Cada mes
