@@ -11,4 +11,6 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 
 "==== $(Get-Date -Format 'yyyy-MM-dd HH:mm') ====" | Out-File -Append -Encoding utf8 reports\daily_task.log
-python -m macro_shock daily 2>&1 | Out-File -Append -Encoding utf8 reports\daily_task.log
+# the private environment from scripts\install.ps1 if there is one, else the system Python
+$py = if (Test-Path .venv\Scripts\python.exe) { ".venv\Scripts\python.exe" } else { "python" }
+& $py -m macro_shock daily 2>&1 | Out-File -Append -Encoding utf8 reports\daily_task.log

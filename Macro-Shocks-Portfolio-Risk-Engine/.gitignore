@@ -8,6 +8,7 @@ cpp/build/
 
 # Local secrets (FRED_API_KEY, ...)
 .env
+.venv/
 
 # Personal data and outputs
 portfolio.csv
