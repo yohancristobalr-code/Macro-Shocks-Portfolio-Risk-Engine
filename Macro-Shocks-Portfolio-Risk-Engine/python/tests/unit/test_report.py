@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from macro_shock.research import analogs as an, charts, french
 
 from .test_cpi_nowcast import as_fred, synthetic
+from .test_crypto import FakeAPI, synthetic_prices
 from .test_macro import SUPPLY_SHOCK, TODAY, FakeFred, french_by_quadrant, macro_series, market
 
 
@@ -105,6 +106,10 @@ def report_fred():
     bdays = pd.bdate_range(end=TODAY, periods=300)
     data.update({"DGS5": pd.Series(4.3, bdays), "DGS30": pd.Series(4.8, bdays), "BAMLC0A0CM": pd.Series(0.9, bdays),
                  "CBBTCUSD": pd.Series(65000.0, index=pd.date_range(end=TODAY, periods=420))})
+    weeks = pd.date_range(end=TODAY, periods=330, freq="W-WED")
+    data.update({"WALCL": pd.Series(7e6 + np.cumsum(rng.normal(0, 2e4, 330)), weeks),
+                 "WTREGEN": pd.Series(800.0, weeks), "RRPONTSYD": pd.Series(150.0, days[-1600:]),
+                 "DFF": pd.Series(3.9, days[-1600:])})
     # long histories for the analogs (VIX, yields and oil since 1990)
     for sid, level, vol in (("VIXCLS", 18.0, 0.5), ("DGS2", 4.0, 0.03), ("DGS10", 4.5, 0.03), ("DCOILWTICO", 60.0, 0.5)):
         long = pd.Series(level + np.cumsum(rng.normal(0, vol, len(days))) * 0.1, days).clip(lower=1.0)
@@ -117,6 +122,8 @@ class TestReportCommand:
     def test_full_report(self, monkeypatch, capsys, tmp_path, report_fred):
         from macro_shock import __main__ as cli
         from macro_shock.data import feed_provider
+        from macro_shock.research import crypto
+        monkeypatch.setattr(crypto, "http_json", FakeAPI(synthetic_prices()))
         texts = french_by_quadrant(pd.bdate_range("1970-01-02", TODAY))
         monkeypatch.setattr(french, "download", lambda dataset, timeout=60.0: texts[dataset])
         fake = FakeFred(report_fred)
@@ -130,7 +137,8 @@ class TestReportCommand:
         assert "Report written to" in out and "incomplete" not in out
         for part in ("Lectura ejecutiva", "1. Qué descuenta el mercado", "2. Crecimiento", "3. Energía e IPC",
                      "4. Régimen de riesgo", "5. Evidencia sectorial", "6. Análogos históricos",
-                     "Meses más parecidos a hoy", "Modelo predictivo", "Shock de oferta"):
+                     "Meses más parecidos a hoy", "Modelo predictivo", "Shock de oferta", "7. Cripto", "ONDO",
+                     "Alertas cripto", "8. Liquidez de la Fed", "Liquidez neta", "9. Salud de los datos", "al día"):
             assert part in html, part
         assert html.count("<svg") >= 10
         assert "Secciones con datos incompletos" not in html
@@ -138,6 +146,8 @@ class TestReportCommand:
     def test_quick_report_and_missing_section(self, monkeypatch, capsys, tmp_path, report_fred):
         from macro_shock import __main__ as cli
         from macro_shock.data import feed_provider
+        from macro_shock.research import crypto
+        monkeypatch.setattr(crypto, "http_json", FakeAPI(synthetic_prices(), fail=("binance",)))
         data = {k: v for k, v in report_fred.items() if k != "GASREGW"}     # CPI nowcast cannot run
         fake = FakeFred(data)
         monkeypatch.setattr(feed_provider, "fred_client", lambda api_key=None: fake)
@@ -147,5 +157,6 @@ class TestReportCommand:
         cli.main()
         out = capsys.readouterr().out
         html = out_file.read_text(encoding="utf-8")
-        assert "section 'ipc' incomplete" in out
+        assert "section 'ipc' incomplete" in out and "section 'cripto' incomplete" in out
+        assert "falló" in html                                      # data health lists the failed series
         assert "Sección no disponible" in html and "Omitida (--quick)" in html and "Lectura ejecutiva" in html

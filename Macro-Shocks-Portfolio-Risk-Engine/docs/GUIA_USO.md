@@ -74,6 +74,7 @@ Todos se ejecutan con `python -m macro_shock <comando>`. Añade `--help` a cualq
 | `fomc-study` | ¿Cómo reaccionaron bitcoin, la bolsa y el VIX a la Fed? | Ocasional |
 | `nowcast` | ¿Cuánto subirá el próximo IPC por la energía? | Antes de cada IPC |
 | `report` | **Todo lo anterior en un informe HTML ejecutivo**, con gráficas, análogos históricos y modelo predictivo | Antes de operar |
+| `crypto` | ¿Cómo están las 10 criptos, su apalancamiento, el sentimiento y la liquidez? ¿Qué funcionó en este régimen? | Diaria o semanal |
 | `macro` | ¿Qué escenario macro descuenta el mercado? ¿Qué dicen los datos de crecimiento e inflación? ¿Qué sectores funcionan en ese cuadrante? | Semanal |
 
 ### 5.1 `daily` — informe diario
@@ -302,6 +303,36 @@ Reúne todos los estudios en un solo archivo que se abre sin internet, con tema 
 - **Análogos históricos**: los 5 meses desde 1990 más parecidos a hoy (VIX, curva, spread Baa, cambio del 10 años y del WTI en 12 meses, ejes de crecimiento e inflación), separados al menos un año entre sí, con lo que hicieron después la bolsa (3, 6 y 12 meses y caída máxima), el 10 años, el petróleo y los sectores, frente a la media de todos los meses.
 - **Modelo predictivo**: regresión *ridge* del exceso de rentabilidad de la bolsa a 3 meses sobre esas mismas variables, **reestimada cada mes desde 2005 solo con datos anteriores**. Si el **R² fuera de muestra** es ≤ 0, el informe lo dice y la previsión **no debe usarse**: la media histórica predice igual o mejor.
 - Si una fuente de datos falla, el informe se genera igual e indica qué sección falta y por qué.
+
+### 5.10 `crypto` — eje cripto y liquidez de la Fed
+
+```powershell
+python -m macro_shock crypto
+```
+
+No necesita ninguna clave ni cuenta: usa APIs públicas (si tienes la clave de FRED, añade el Nasdaq, el cuadrante y la liquidez de la Fed). En el informe HTML es la sección 7.
+
+**Las 10 monedas:** BTC, ETH, SOL, AAVE y ONDO (tu elección), más XRP, BNB, DOGE, ADA y LINK: las mayores no estables con más de 5 años de historia en Binance, que cubren pagos, exchange, plataformas, oráculos y memes. Las stablecoins (USDT, USDC) no entran en el análisis de precio, pero su oferta total se usa como indicador de liquidez. La lista está en `COINS`, en `python/src/macro_shock/research/crypto.py`.
+
+| Dato | Fuente | Cómo leerlo |
+|---|---|---|
+| Precios desde 2017 | Binance (espejo público `data-api.binance.vision`) | Rendimiento a 7, 30, 90 días y 1 año; volatilidad; caída desde el máximo de 12 meses |
+| Beta y correlación | Cálculo propio (90 días) | Beta > 1: amplifica los movimientos de BTC. Correlación con el Nasdaq ≥ 0.6: cotiza como activo de riesgo |
+| **Funding** | Futuros de Binance | Lo que pagan los largos apalancados. **≥ 30% anual: exceso de apalancamiento** (riesgo de liquidaciones en cascada). Negativo: dominan los cortos |
+| Interés abierto | Futuros de Binance (30 días) | Si sube mucho junto al precio, la subida va apalancada |
+| Capitalización, ranking, dominancia de BTC | CoinGecko | Dominancia al alza: el dinero se refugia en BTC |
+| Fear & Greed | alternative.me | ≥ 75 codicia extrema, ≤ 25 miedo extremo |
+| Oferta de stablecoins | DefiLlama | Si cae, sale liquidez del ecosistema |
+
+**Régimen cripto** (a partir de BTC): tendencia (por encima o por debajo de su media de 200 días) × volatilidad (la de 30 días frente a su mediana anual). La evidencia muestra qué monedas superaron a BTC en los 30 días siguientes en cada régimen, y cómo rindieron BTC y ETH en cada **cuadrante macro**, con las mismas marcas `**`/`*`. Las monedas jóvenes (ONDO desde 2024) tienen pocas ventanas y casi nunca alcanzan una marca: es lo correcto, no un fallo.
+
+**Liquidez de la Fed** (sección 8 del informe): balance de la Fed − cuenta del Tesoro − repos inversos, en billones de dólares, y expectativas de tipos (bono a 2 años − fed funds: positivo, el mercado espera subidas; negativo, bajadas). El informe **mide** la correlación de la liquidez con el Nasdaq y BTC en los últimos 6 años, en lugar de suponerla.
+
+⚠️ Si Binance está restringido en tu país, los futuros (funding e interés abierto) pueden fallar: el resto sigue funcionando y la sección 9 lo indica.
+
+### 5.11 Salud de los datos (sección 9 del informe)
+
+Revisa cada serie que usó el informe: último dato, días de antigüedad, frecuencia y estado (**al día**, **desactualizada** o **falló**). Los problemas aparecen arriba de la tabla. Si una serie falla varios días seguidos, probablemente la fuente cambió su identificador: es lo primero que hay que corregir.
 
 ---
 

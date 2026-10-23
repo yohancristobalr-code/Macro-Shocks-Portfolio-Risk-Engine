@@ -59,9 +59,10 @@ SERIES: Dict[str, Tuple[str, str]] = {
     "philly_activity": ("GACDFSA066MSFRBPHI", "Philadelphia Fed: activity"),
     "philly_orders": ("NOCDFSA066MSFRBPHI", "Philadelphia Fed: new orders"),
     "philly_prices": ("PPCDFSA066MSFRBPHI", "Philadelphia Fed: prices paid"),
-    "empire_activity": ("GACDINA066MSFRBNY", "New York Fed: activity"),
-    "empire_orders": ("NOCDINA066MSFRBNY", "New York Fed: new orders"),
-    "empire_prices": ("PPCDINA066MSFRBNY", "New York Fed: prices paid"),
+    # "a|b": candidate ids tried in order (seasonally adjusted first)
+    "empire_activity": ("GACDISA066MSFRBNY|GACDINA066MSFRBNY", "New York Fed: activity"),
+    "empire_orders": ("NOCDISA066MSFRBNY|NOCDINA066MSFRBNY", "New York Fed: new orders"),
+    "empire_prices": ("PPCDISA066MSFRBNY|PPCDINA066MSFRBNY", "New York Fed: prices paid"),
 }
 REQUIRED = ("claims", "indpro", "payrolls", "cpi", "core")
 FULL_HISTORY_START = date(1967, 1, 1)
@@ -90,15 +91,20 @@ SURVEYS = (("activity", "General activity"), ("orders", "New orders"), ("prices"
 
 def fetch(fred, start: date, end: date) -> Dict[str, pd.Series]:
     out = {}
-    for key, (sid, _) in SERIES.items():
-        try:
-            s = pd.Series(fred.get_series(sid, observation_start=str(start), observation_end=str(end)),
-                          dtype=float).dropna().sort_index()
-            s.index = pd.DatetimeIndex(s.index)
-        except Exception as e:
+    for key, (ids, _) in SERIES.items():
+        s, error = None, None
+        for sid in ids.split("|"):
+            try:
+                s = pd.Series(fred.get_series(sid, observation_start=str(start), observation_end=str(end)),
+                              dtype=float).dropna().sort_index()
+                s.index = pd.DatetimeIndex(s.index)
+                break
+            except Exception as e:
+                error = e
+        if s is None:
             if key in REQUIRED:
-                raise ValueError(f"FRED series {sid} is unavailable ({e})")
-            logger.warning("growth_input_unavailable", series=sid, error=str(e))
+                raise ValueError(f"FRED series {ids} is unavailable ({error})")
+            logger.warning("growth_input_unavailable", series=ids, error=str(error))
             s = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
         out[key] = s
     return out
