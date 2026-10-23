@@ -211,6 +211,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         _print_sector_suggestions(ctx.risk_score.regime.value, args.data)
     if portfolio is not None and ctx.scenario_tree:
         _print_portfolio_stress(portfolio, ctx.scenario_tree)
+    if args.inflation:
+        _print_inflation_check(ctx)
 
     if args.output:
         result = {}
@@ -258,6 +260,24 @@ def _print_portfolio_stress(portfolio, tree) -> None:
         if pnl < 0:
             print(f"    {name:<30} {pnl:>+12,.0f}")
     print("  Scenario magnitudes are illustrative; use for sizing, not as a forecast.")
+    print(sep + "\n")
+
+
+def _print_inflation_check(ctx) -> None:
+    """Compare the statement's tone with the CPI nowcast from energy prices."""
+    from macro_shock.data.feed_provider import fred_client
+    from macro_shock.research import cpi_nowcast
+
+    hd = ctx.policy_surprise.hawkish_dovish if ctx.policy_surprise else None
+    stance = hd.stance.value if hd else "n/a"
+    sep = "─" * 65
+    print("  INFLATION CROSS-CHECK (energy prices -> next CPI)")
+    print(sep)
+    try:
+        for line in cpi_nowcast.inflation_check(cpi_nowcast.run(fred_client()), stance):
+            print(line)
+    except Exception as e:
+        print(f"  CPI nowcast unavailable ({e}).")
     print(sep + "\n")
 
 
@@ -412,7 +432,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
     from macro_shock.data.feed_provider import DataFeedError, FREDFeedProvider, fred_client
     from macro_shock.event_detection.calendar import MarketCalendar
     from macro_shock.market_context.vulnerability_scorer import MarketVulnerabilityScorer
-    from macro_shock.research import daily, sector_study
+    from macro_shock.research import cpi_nowcast, daily, sector_study
 
     today = date.today()
     try:
@@ -440,13 +460,26 @@ def cmd_daily(args: argparse.Namespace) -> None:
                       "funding": vuln.funding_vulnerability}
     named = {"curve": "yield_curve"}
     components = {k: v for k, v in all_components.items() if named.get(k, k) not in vuln.missing_components}
-    row = daily.snapshot_row(today, data_through, vuln.regime.value, vuln.composite, snap, btc)
+    prices, nowcast_line = {}, None
+    if not args.quick:
+        try:
+            nc = cpi_nowcast.run(fred_client(), today)
+            prices, nowcast_line = nc.prices, cpi_nowcast.summary_line(nc)
+        except Exception as e:
+            nowcast_line = f"  (CPI nowcast unavailable today: {e})"
+    if not prices:
+        try:
+            prices = cpi_nowcast.fetch_prices(fred_client(), today - timedelta(days=400), today)
+        except Exception:
+            pass                                # energy prices are informative only
+    row = daily.snapshot_row(today, data_through, vuln.regime.value, vuln.composite, snap, btc,
+                             cpi_nowcast.latest_levels(prices) if prices else None)
 
     reports = Path(args.reports_dir) if args.reports_dir else _PROJECT_ROOT / "reports"
     log_path = reports / "daily_log.csv"
     log = daily.read_log(log_path)
     previous = daily.previous_row(log, today)
-    alert_lines = daily.alerts(row, previous)
+    alert_lines = daily.alerts(row, previous) + cpi_nowcast.energy_alerts(prices)
 
     sector_lines = None
     if not args.quick:
@@ -456,12 +489,35 @@ def cmd_daily(args: argparse.Namespace) -> None:
         except Exception as e:
             sector_lines = [f"    (sector study unavailable today: {e})"]
 
-    lines = daily.render(row, alert_lines, previous, components, sector_lines)
+    lines = daily.render(row, alert_lines, previous, components, sector_lines, nowcast_line)
     print("\n" + "\n".join(lines))
     daily.write_log(log, row, log_path)
     report = reports / f"daily_{today.isoformat()}.txt"
     report.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nSaved {report} and {log_path}")
+
+
+# ──────────────────────────────────────────────────────────────
+# Command: nowcast
+# ──────────────────────────────────────────────────────────────
+
+def cmd_nowcast(args: argparse.Namespace) -> None:
+    """Next US CPI from energy prices, built up from the CPI's energy sub-items."""
+    from macro_shock.data.feed_provider import DataFeedError, fred_client
+    from macro_shock.research import cpi_nowcast
+
+    try:
+        nc = cpi_nowcast.run(fred_client())
+    except (DataFeedError, cpi_nowcast.NowcastError) as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: could not build the CPI nowcast ({e}). FRED may be down; try again later.")
+        sys.exit(1)
+    print("\n" + "\n".join(cpi_nowcast.report_lines(nc)) + "\n")
+    if args.output:
+        nc.backtest.to_csv(args.output, index=False)
+        print(f"Backtest table written to: {args.output}")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -826,6 +882,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ana.add_argument("--sectors", action="store_true",
                        help="Show sectors/styles that historically did best in the detected regime "
                             "(downloads French Data Library + FRED history)")
+    p_ana.add_argument("--inflation", action="store_true",
+                       help="Compare the statement's tone with the CPI nowcast from energy prices "
+                            "(needs FRED_API_KEY)")
     p_ana.add_argument("--stress", type=float, default=0.35,
                        help="Market stress level 0-1 (synthetic data only)")
     p_ana.add_argument("--output", default=None, help="Write JSON output to file")
@@ -880,6 +939,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_day.add_argument("--reports-dir", default=None,
                        help="Folder for reports and the CSV log (default: <project>/reports)")
     p_day.set_defaults(func=cmd_daily)
+
+    p_now = sub.add_parser("nowcast", help="Next US CPI from energy prices and CPI sub-items (needs FRED_API_KEY)")
+    p_now.add_argument("--output", default=None, help="Write the month-by-month backtest to a CSV file")
+    p_now.set_defaults(func=cmd_nowcast)
 
     p_srv = sub.add_parser("serve", help="Start the REST API server")
     p_srv.add_argument("--host", default="0.0.0.0")

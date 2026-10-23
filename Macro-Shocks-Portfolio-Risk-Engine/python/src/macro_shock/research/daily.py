@@ -6,7 +6,8 @@ against the previous run, and a dated report plus a CSV log.
 
 Alert thresholds are deliberately few and simple so they are easy to act on:
 a regime change, VIX up 5+ points, HY spreads 50+ bps wider than the previous
-run, and the S&P 500 10%+ below its 52-week high.
+run, and the S&P 500 10%+ below its 52-week high. Energy price alerts come
+from research/cpi_nowcast.py.
 """
 
 from __future__ import annotations
@@ -20,7 +21,9 @@ import numpy as np
 import pandas as pd
 
 LOG_COLUMNS = ["run_date", "data_through", "regime", "vulnerability", "vix", "hy_bps", "ig_bps",
-               "slope_2_10_bps", "y10", "spx_vs_high_pct", "btc"]
+               "slope_2_10_bps", "y10", "spx_vs_high_pct", "btc",
+               "wti", "brent", "henry_hub", "gasoline_retail", "diesel_retail", "crack_321"]
+ENERGY_COLUMNS = LOG_COLUMNS[-6:]
 
 VIX_JUMP = 5.0          # points
 HY_WIDENING = 50.0      # bps
@@ -28,8 +31,8 @@ SPX_CORRECTION = -10.0  # % below the 52-week high
 
 
 def snapshot_row(run_date: date, data_through: date, regime: str, vulnerability: float,
-                 snap, btc: Optional[float]) -> Dict[str, object]:
-    """One log row from a MarketStateSnapshot (missing inputs become NaN)."""
+                 snap, btc: Optional[float], energy: Optional[Dict[str, float]] = None) -> Dict[str, object]:
+    """One log row from a MarketStateSnapshot and energy prices (missing inputs become NaN)."""
     y, c, v, e = snap.yields, snap.credit, snap.volatility, snap.equity
     get = lambda obj, attr: getattr(obj, attr) if obj is not None and getattr(obj, attr) is not None else np.nan
     dd = get(e, "spx_from_52w_high")
@@ -45,6 +48,7 @@ def snapshot_row(run_date: date, data_through: date, regime: str, vulnerability:
         "y10": get(y, "y10"),
         "spx_vs_high_pct": dd * 100 if not np.isnan(dd) else np.nan,
         "btc": btc if btc is not None else np.nan,
+        **{k: (energy or {}).get(k, np.nan) for k in ENERGY_COLUMNS},
     }
 
 
@@ -104,8 +108,20 @@ class DailyReport:
     alerts: List[str]
 
 
+ENERGY_LABELS = (("wti", "WTI", ".2f"), ("brent", "Brent", ".2f"), ("henry_hub", "Henry Hub", ".2f"),
+                 ("gasoline_retail", "gasoline", ".2f"), ("diesel_retail", "diesel", ".2f"),
+                 ("crack_321", "3-2-1 margin", ".1f"))
+
+
+def energy_line(row: Dict[str, object]) -> Optional[str]:
+    parts = [f"{label} {format(row[k], spec)}" for k, label, spec in ENERGY_LABELS
+             if row.get(k) is not None and not pd.isna(row.get(k))]
+    return "  Energy: " + "  | ".join(parts) if parts else None
+
+
 def render(row: Dict[str, object], alert_lines: List[str], previous: Optional[Dict[str, object]],
-           components: Dict[str, float], sector_lines: Optional[List[str]]) -> List[str]:
+           components: Dict[str, float], sector_lines: Optional[List[str]],
+           nowcast_line: Optional[str] = None) -> List[str]:
     sep = "─" * 72
     fmt = lambda v, spec: "n/a" if v is None or pd.isna(v) else format(v, spec)
     lines = [sep, f"  DAILY MARKET REPORT — run {row['run_date']}, FRED data through {row['data_through']}", sep,
@@ -116,6 +132,11 @@ def render(row: Dict[str, object], alert_lines: List[str], previous: Optional[Di
              f"| HY {fmt(row['hy_bps'], '.0f')}bps  | IG {fmt(row['ig_bps'], '.0f')}bps",
              f"  VIX {fmt(row['vix'], '.1f')}  | S&P 500 vs 52w high {fmt(row['spx_vs_high_pct'], '+.1f')}%  "
              f"| Bitcoin {fmt(row['btc'], ',.0f')}"]
+    energy = energy_line(row)
+    if energy:
+        lines.append(energy + "   ($/bbl, $/MMBtu, $/gal)")
+    if nowcast_line:
+        lines.append(nowcast_line)
     if previous is not None:
         lines.append(f"  Previous run {previous.get('run_date')}: regime {previous.get('regime')}, "
                      f"VIX {fmt(previous.get('vix'), '.1f')}, HY {fmt(previous.get('hy_bps'), '.0f')}bps")
