@@ -328,9 +328,26 @@ No necesita ninguna clave ni cuenta: usa APIs públicas (si tienes la clave de F
 
 **Liquidez de la Fed** (sección 8 del informe): balance de la Fed − cuenta del Tesoro − repos inversos, en billones de dólares, y expectativas de tipos (bono a 2 años − fed funds: positivo, el mercado espera subidas; negativo, bajadas). El informe **mide** la correlación de la liquidez con el Nasdaq y BTC en los últimos 6 años, en lugar de suponerla.
 
-⚠️ Si Binance está restringido en tu país, los futuros (funding e interés abierto) pueden fallar: el resto sigue funcionando y la sección 9 lo indica.
+⚠️ Si Binance está restringido en tu país, los futuros (funding e interés abierto) pueden fallar: el resto sigue funcionando y la sección 11 lo indica.
 
-### 5.11 Salud de los datos (sección 9 del informe)
+### 5.11 Carry trade del yen (sección 9 del informe)
+
+Muchos inversores se endeudan en yenes (tipos casi nulos) para invertir en activos que rinden más. Si el yen sube con fuerza, tienen que recomprarlo para devolver el préstamo y venden lo que compraron: en agosto de 2024 ese desmontaje hundió el Nasdaq y bitcoin en pocos días.
+
+| Dato | Cómo leerlo |
+|---|---|
+| USDJPY y su cambio en 10 días | Si baja, el yen se fortalece |
+| Volatilidad de 20 días (percentil de 3 años) | Por encima del percentil 90: el carry está bajo tensión |
+| Diferencial a 3 meses EE. UU. − Japón | Lo que gana el carry; **carry / riesgo** alto = operación atractiva y abarrotada |
+| **Señal de desmontaje** | El yen sube un 3% o más en 10 días hábiles. También aparece como alerta en `daily` |
+
+El informe **mide** qué hicieron el Nasdaq y BTC en los 30 días siguientes a cada episodio desde 2000, frente a cualquier periodo de 30 días.
+
+### 5.12 Historial de aciertos (sección 10 del informe)
+
+Cada `report` guarda sus previsiones en `reports\predicciones.csv`: el nowcast del IPC con su rango, la mediana de los análogos a 6 meses y la previsión del modelo a 3 meses. Los informes siguientes evalúan las que ya tienen resultado: el error medio, el porcentaje de IPC dentro del rango del 90% y el porcentaje de signos acertados. **Tras unos meses sabrás, con datos propios, cuánto fiarte de cada pieza.** Si generas varios informes el mismo día, solo cuenta el último.
+
+### 5.13 Salud de los datos (sección 11 del informe)
 
 Revisa cada serie que usó el informe: último dato, días de antigüedad, frecuencia y estado (**al día**, **desactualizada** o **falló**). Los problemas aparecen arriba de la tabla. Si una serie falla varios días seguidos, probablemente la fuente cambió su identificador: es lo primero que hay que corregir.
 

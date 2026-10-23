@@ -432,7 +432,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
     from macro_shock.data.feed_provider import DataFeedError, FREDFeedProvider, fred_client
     from macro_shock.event_detection.calendar import MarketCalendar
     from macro_shock.market_context.vulnerability_scorer import MarketVulnerabilityScorer
-    from macro_shock.research import cpi_nowcast, daily, growth, macro, macro_scenario, sector_study
+    from macro_shock.research import carry, cpi_nowcast, daily, growth, macro, macro_scenario, sector_study
 
     today = date.today()
     try:
@@ -493,6 +493,10 @@ def cmd_daily(args: argparse.Namespace) -> None:
     log = daily.read_log(log_path)
     previous = daily.previous_row(log, today)
     alert_lines = daily.alerts(row, previous) + cpi_nowcast.energy_alerts(prices)
+    try:
+        alert_lines += carry.alerts(carry.assess(carry.fetch(fred_client(), today)))
+    except Exception:
+        pass                                    # the carry alert is informative only
 
     sector_lines = None
     if not args.quick:
@@ -611,8 +615,8 @@ def cmd_report(args: argparse.Namespace) -> None:
         print(f"ERROR: {e}")
         sys.exit(1)
     print("Collecting data (FRED, French Data Library)... this takes 1-3 minutes.")
-    ctx = report.gather(fred, quick=args.quick)
     path = Path(args.output) if args.output else _PROJECT_ROOT / "reports" / f"informe_{date.today().isoformat()}.html"
+    ctx = report.gather(fred, quick=args.quick, track_path=path.parent / "predicciones.csv")
     report.write(ctx, path)
     for name, err in ctx.errors.items():
         print(f"  section '{name}' incomplete: {err}")
