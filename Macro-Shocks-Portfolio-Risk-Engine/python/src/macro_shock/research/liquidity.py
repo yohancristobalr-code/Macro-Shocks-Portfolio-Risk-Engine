@@ -49,8 +49,8 @@ def net_liquidity(s: Dict[str, pd.Series]) -> pd.Series:
     if walcl.empty:
         return walcl
     parts = [walcl]
-    for key in ("tga", "rrp"):
-        x = s[key]
+    for key, scale in (("tga", 1000), ("rrp", 1)):              # FRED units: WTREGEN millions, RRPONTSYD billions
+        x = s[key] / scale
         parts.append(x.reindex(walcl.index.union(x.index)).ffill().reindex(walcl.index) if len(x) else 0 * walcl)
     return (parts[0] - parts[1] - parts[2]).dropna()
 

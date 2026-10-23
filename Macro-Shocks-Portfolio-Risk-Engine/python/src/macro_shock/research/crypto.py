@@ -66,7 +66,7 @@ HORIZON = 30                     # days ahead for the evidence
 TREND_DAYS, VOL_DAYS = 200, 30
 
 FUNDING_HOT = 30.0               # % annualized: crowded longs
-FUNDING_COLD = 0.0               # below: shorts pay, crowded shorts
+FUNDING_COLD = -5.0              # % annualized, below: shorts pay, crowded shorts
 GREED, FEAR = 75, 25
 DRAWDOWN_ALERT = -20.0           # % from the 1-year high
 CORR_RISK = 0.6                  # BTC-Nasdaq correlation: trading as a risk asset
@@ -354,6 +354,13 @@ def supported(table: pd.DataFrame, label: Optional[str]) -> pd.DataFrame:
     return t.sort_values("mean_pct", ascending=False)
 
 
+def fmt_price(v: float) -> str:
+    """81,226 / 104.2 / 0.4362: readable at any magnitude."""
+    if v is None or pd.isna(v):
+        return "n/a"
+    return f"{v:,.0f}" if v >= 1000 else f"{v:,.2f}" if v >= 1 else f"{v:.4f}"
+
+
 def report_lines(view: CryptoView, quadrant: Optional[str] = None) -> List[str]:
     sep = "─" * 72
     t = view.table
@@ -363,7 +370,7 @@ def report_lines(view: CryptoView, quadrant: Optional[str] = None) -> List[str]:
              f"    {'Coin':<6}{'price':>12}{'7d':>8}{'30d':>8}{'90d':>8}{'vol30':>8}{'vs 1y hi':>9}{'beta':>6}"
              f"{'corr NQ':>8}{'funding':>9}"]
     for sym, r in t.iterrows():
-        lines.append(f"    {sym:<6}{f(r['price'], ',.4g'):>12}{f(r['r7'], '+.1f'):>8}{f(r['r30'], '+.1f'):>8}"
+        lines.append(f"    {sym:<6}{fmt_price(r['price']):>12}{f(r['r7'], '+.1f'):>8}{f(r['r30'], '+.1f'):>8}"
                      f"{f(r['r90'], '+.1f'):>8}{f(r['vol30'], '.0f'):>8}{f(r['dd_1y'], '+.0f'):>9}{f(r['beta_btc'], '.2f'):>6}"
                      f"{f(r['corr_nasdaq'], '+.2f'):>8}{f(r['funding'], '+.0f'):>8}%")
     d = view.data

@@ -657,7 +657,7 @@ def section_crypto(ctx: Context) -> str:
         cards.append(_kpi("Stablecoins", f"{d.stablecoins.iloc[-1] / 1e9:,.0f} mil M$ "
                           f"<span class='{_cls(cr._ret(d.stablecoins, 30))}'>{cr._ret(d.stablecoins, 30):+.1f}% 30d</span>"))
     rows = [[f"<b>{escape(sym)}</b> <span class='muted'>{escape(r['segment'])}</span>",
-             f"{r['price']:,.4g}", _num(r["r7"], "+.1f", "%"), _num(r["r30"], "+.1f", "%"), _num(r["r90"], "+.1f", "%"),
+             cr.fmt_price(r["price"]), _num(r["r7"], "+.1f", "%"), _num(r["r30"], "+.1f", "%"), _num(r["r90"], "+.1f", "%"),
              _num(r["r365"], "+.0f", "%"), f"{r['vol30']:.0f}%", _num(r["dd_1y"], "+.0f", "%"),
              "" if pd.isna(r["beta_btc"]) else f"{r['beta_btc']:.2f}", _num(r["corr_nasdaq"], "+.2f"),
              _num(r["funding"], "+.0f", "%"), _num(r["oi_30d"], "+.0f", "%")] for sym, r in t.iterrows()]
