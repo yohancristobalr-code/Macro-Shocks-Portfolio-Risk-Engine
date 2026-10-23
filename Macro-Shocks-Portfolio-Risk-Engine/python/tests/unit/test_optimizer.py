@@ -199,6 +199,32 @@ class TestStockBondMix:
         pick, ok = allocation.choose_for_drawdown(frontier, 0.0001)
         assert not ok and pick["stocks"] == 0.4
 
+    def test_drawdown_on_drops_missing_assets(self):
+        idx = pd.bdate_range("2024-01-01", periods=4)
+        r = pd.DataFrame({"A": [0.10, -0.50, 0.10, 0.0]}, index=idx)
+        dd, trough = allocation.drawdown_on(r, pd.Series({"A": 0.5, "BTC": 0.5}))
+        assert dd == pytest.approx(-0.5) and trough == idx[1].date()
+
+    def test_choice_respects_the_long_history_too(self):
+        frontier = pd.DataFrame({
+            "stocks": [1.0, 0.8, 0.6, 0.4],
+            "max_drawdown": [-0.30, -0.22, -0.18, -0.12],
+            "max_drawdown_long": [-0.50, -0.38, -0.27, -0.19],
+        })
+        pick, ok = allocation.choose_for_drawdown(frontier, 0.25)
+        assert ok and pick["stocks"] == 0.4                 # 0.8 passes recently, fails since 1990
+        recent = frontier.drop(columns="max_drawdown_long")
+        assert allocation.choose_for_drawdown(recent, 0.25)[0]["stocks"] == 0.8
+
+    def test_frontier_adds_long_history_drawdown(self):
+        _, industries, market, fred = synthetic_inputs()
+        returns, assets = self._universe()
+        history = allocation.long_returns(fred, industries, market, start=date(2015, 1, 1))
+        frontier = allocation.drawdown_frontier(returns, assets, 0.03, (1.0, 0.5), long_returns=history)
+        assert "max_drawdown_long" in frontier
+        assert (frontier["max_drawdown_long"] <= 0).all()
+        assert frontier.loc[0, "max_drawdown_long"] < frontier.loc[1, "max_drawdown_long"]
+
     def test_mix_objective(self):
         returns, assets = self._universe()
         alloc = allocation.optimize(returns, assets, "mix", mix={"stocks": 0.8, "btc": 0.03})
@@ -248,11 +274,22 @@ class TestOptimizeCommand:
                                           "--max-drawdown", "0.25", "--output", "opt.csv"])
         cli.main()
         out = capsys.readouterr().out
-        assert "stock/bond mix of risk-parity sleeves" in out and "Stocks vs drawdown (limit -25%)" in out
+        assert "stock/bond mix of risk-parity sleeves" in out
+        assert "Stocks vs drawdown (limit -25%, in both the recent window and since 1990)" in out
+        assert "DD 1990+" in out
         assert out.count("<- chosen") == 1
         assert "Risk share" in out
         assert "Longer history check" in out and "max drawdown" in out
         assert load_portfolio(tmp_path / "opt.csv")["value"].sum() == pytest.approx(100000, abs=1)
+
+    def test_recent_only_skips_the_long_history_column(self, monkeypatch, capsys, tmp_path):
+        from macro_shock import __main__ as cli
+        self._patch(monkeypatch, tmp_path)
+        monkeypatch.setattr(sys, "argv", ["msre", "optimize", "--years", "5", "--tilt", "0",
+                                          "--max-drawdown", "0.25", "--recent-only"])
+        cli.main()
+        out = capsys.readouterr().out
+        assert "in the recent window only" in out and "DD 1990+" not in out
 
     def test_fixed_stock_share(self, monkeypatch, capsys, tmp_path):
         from macro_shock import __main__ as cli

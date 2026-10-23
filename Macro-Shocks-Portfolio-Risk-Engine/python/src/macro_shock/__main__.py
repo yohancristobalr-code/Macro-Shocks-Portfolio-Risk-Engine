@@ -11,6 +11,7 @@ Commands:
   fomc-study  Bitcoin / S&P 500 / VIX reaction to FOMC announcements (FRED data)
   sector-study Sectors and styles that did best in each market regime (French + FRED)
   optimize    Sector / Treasury / Bitcoin weights by risk parity or minimum variance
+  daily       Daily routine: market inputs, regime, alerts vs the previous run, saved report
   serve       Start the REST API server
   health      Run system health check
   demo        Run a canned scenario demonstration
@@ -25,6 +26,7 @@ Examples:
   python -m macro_shock sector-study                          # sectors by regime
   python -m macro_shock optimize --output portfolio_optimized.csv
   python -m macro_shock optimize --max-drawdown 0.25          # most equity risk within a -25% drawdown
+  python -m macro_shock daily                                 # daily report saved under reports/
   python -m macro_shock serve --port 8000
   python -m macro_shock health --env production
   python -m macro_shock demo --scenario weekend_crisis
@@ -399,6 +401,67 @@ def cmd_sector_study(args: argparse.Namespace) -> None:
 
 
 # ──────────────────────────────────────────────────────────────
+# Command: daily
+# ──────────────────────────────────────────────────────────────
+
+def cmd_daily(args: argparse.Namespace) -> None:
+    """Daily routine: FRED market inputs, regime, alerts against the previous run, saved report."""
+    import re
+    from datetime import date, timedelta
+
+    from macro_shock.data.feed_provider import DataFeedError, FREDFeedProvider, fred_client
+    from macro_shock.event_detection.calendar import MarketCalendar
+    from macro_shock.market_context.vulnerability_scorer import MarketVulnerabilityScorer
+    from macro_shock.research import daily, sector_study
+
+    today = date.today()
+    try:
+        snap = FREDFeedProvider(MarketCalendar()).get_snapshot()
+    except DataFeedError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: could not read FRED ({e}). FRED may be down; try again later.")
+        sys.exit(1)
+
+    btc = None
+    try:
+        s = fred_client().get_series("CBBTCUSD", observation_start=str(today - timedelta(days=14)),
+                                     observation_end=str(today)).dropna()
+        btc = float(s.iloc[-1]) if len(s) else None
+    except Exception:
+        pass                                    # Bitcoin is informative only
+
+    vuln = MarketVulnerabilityScorer().score(snap, log=False)
+    found = re.search(r"through (\d{4}-\d{2}-\d{2})", snap.gap_description or "")
+    data_through = date.fromisoformat(found.group(1)) if found else today
+    components = {"volatility": vuln.volatility_vulnerability, "credit": vuln.credit_vulnerability,
+                  "curve": vuln.yield_curve_vulnerability}
+    row = daily.snapshot_row(today, data_through, vuln.regime.value, vuln.composite, snap, btc)
+
+    reports = Path(args.reports_dir) if args.reports_dir else _PROJECT_ROOT / "reports"
+    log_path = reports / "daily_log.csv"
+    log = daily.read_log(log_path)
+    previous = daily.previous_row(log, today)
+    alert_lines = daily.alerts(row, previous)
+
+    sector_lines = None
+    if not args.quick:
+        try:
+            study = sector_study.run(fred_client(), date(1990, 1, 1))
+            sector_lines = sector_study.supported_lines(study, row["regime"])[1:]
+        except Exception as e:
+            sector_lines = [f"    (sector study unavailable today: {e})"]
+
+    lines = daily.render(row, alert_lines, previous, components, sector_lines)
+    print("\n" + "\n".join(lines))
+    daily.write_log(log, row, log_path)
+    report = reports / f"daily_{today.isoformat()}.txt"
+    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nSaved {report} and {log_path}")
+
+
+# ──────────────────────────────────────────────────────────────
 # Command: optimize
 # ──────────────────────────────────────────────────────────────
 
@@ -428,8 +491,10 @@ def cmd_optimize(args: argparse.Namespace) -> None:
         if not 0 <= btc < 1:
             raise ValueError("--btc-weight must be between 0 and 1")
         objective, mix, frontier, pick, within = args.objective, None, None, None, True
+        history = allocation.long_returns(fred, industries, market)
         if args.max_drawdown is not None:
-            frontier = allocation.drawdown_frontier(returns, assets, btc)
+            frontier = allocation.drawdown_frontier(
+                returns, assets, btc, long_returns=None if args.recent_only else history)
             pick, within = allocation.choose_for_drawdown(frontier, args.max_drawdown)
             mix, objective = {"stocks": float(pick["stocks"]), "btc": btc}, "mix"
         elif args.stocks is not None:
@@ -444,7 +509,8 @@ def cmd_optimize(args: argparse.Namespace) -> None:
             tilts = allocation.regime_tilts(study.sectors, regime, args.tilt)
             notes = allocation.style_notes(study.styles, regime)
         alloc = allocation.optimize(returns, assets, objective, args.max_weight, tilts, regime, notes, mix=mix)
-        long_run = allocation.long_history_drawdown(fred, industries, market, alloc.tilted, assets)
+        long_run = allocation.long_history_drawdown(fred, industries, market, alloc.tilted, assets,
+                                                    returns=history)
     except (DataFeedError, FrenchDataError, ValueError) as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -459,13 +525,17 @@ def cmd_optimize(args: argparse.Namespace) -> None:
     if alloc.objective == "min_variance":
         print(f"  Max weight per asset: {args.max_weight:.0%}")
     if frontier is not None:
-        print(f"\n  Stocks vs drawdown (limit {-abs(args.max_drawdown):.0%}); sectors and bonds each "
-              f"risk-parity within their sleeve:")
-        print(f"    {'Stocks':>7} {'Bonds':>6} {'BTC':>5} {'Vol':>6} {'Ret/yr':>7} {'Max DD':>7}")
+        long_col = "max_drawdown_long" in frontier
+        rule = "in both the recent window and since 1990" if long_col else "in the recent window only"
+        print(f"\n  Stocks vs drawdown (limit {-abs(args.max_drawdown):.0%}, {rule}); sectors and bonds "
+              f"each risk-parity within their sleeve:")
+        print(f"    {'Stocks':>7} {'Bonds':>6} {'BTC':>5} {'Vol':>6} {'Ret/yr':>7} {'Max DD':>7}"
+              + (f" {'DD 1990+':>9}" if long_col else ""))
         for _, r in frontier.iterrows():
             mark = "  <- chosen" if r["stocks"] == pick["stocks"] else ""
+            extra = f" {r['max_drawdown_long']:>9.1%}" if long_col else ""
             print(f"    {r['weight_equity']:>7.0%} {r['weight_bonds']:>6.0%} {r['weight_bitcoin']:>5.0%} "
-                  f"{r['volatility']:>6.1%} {r['annual_return']:>7.1%} {r['max_drawdown']:>7.1%}{mark}")
+                  f"{r['volatility']:>6.1%} {r['annual_return']:>7.1%} {r['max_drawdown']:>7.1%}{extra}{mark}")
         if not within:
             print(f"  ⚠  No mix kept the drawdown within {-abs(args.max_drawdown):.0%}; showing the least risky one.")
     if regime:
@@ -789,6 +859,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_opt.add_argument("--max-drawdown", type=float, default=None,
                        help="e.g. 0.25: pick the most stock-heavy mix whose historical drawdown stays "
                             "within -25%%")
+    p_opt.add_argument("--recent-only", action="store_true",
+                       help="With --max-drawdown, check the limit on the recent window only, not since 1990")
     p_opt.add_argument("--stocks", type=float, default=None,
                        help="Fixed share of the non-Bitcoin money in stocks (e.g. 0.7); bonds get the rest")
     p_opt.add_argument("--btc-weight", type=float, default=0.03,
@@ -798,6 +870,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_opt.add_argument("--value", type=float, default=100000, help="Portfolio value for the output CSV")
     p_opt.add_argument("--output", default="portfolio_optimized.csv", help="Output CSV (analyze --portfolio format)")
     p_opt.set_defaults(func=cmd_optimize)
+
+    p_day = sub.add_parser("daily", help="Daily market report: regime, alerts, evidence (needs FRED_API_KEY)")
+    p_day.add_argument("--quick", action="store_true",
+                       help="Skip the sector study (faster; no French Data Library download)")
+    p_day.add_argument("--reports-dir", default=None,
+                       help="Folder for reports and the CSV log (default: <project>/reports)")
+    p_day.set_defaults(func=cmd_daily)
 
     p_srv = sub.add_parser("serve", help="Start the REST API server")
     p_srv.add_argument("--host", default="0.0.0.0")
