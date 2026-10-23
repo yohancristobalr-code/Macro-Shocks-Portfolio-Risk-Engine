@@ -18,7 +18,9 @@ from typing import Dict
 
 import pandas as pd
 
-MAX_AGE = {"diaria": 7, "semanal": 16, "mensual": 75, "trimestral": 130}
+# days since the last observation's date (monthly data are dated at the month's start; some OECD
+# series arrive ~2.5 months late)
+MAX_AGE = {"diaria": 7, "semanal": 16, "mensual": 100, "trimestral": 130}
 
 
 def frequency(s: pd.Series) -> str:
@@ -38,7 +40,7 @@ def check(sources: Dict[str, Dict[str, pd.Series]], today: date) -> pd.DataFrame
                 rows.append({"source": source, "series": name, "last": None, "age": None, "freq": "", "status": "failed"})
                 continue
             last = pd.Timestamp(s.index[-1]).date()
-            age = (today - last).days
+            age = max((today - last).days, 0)          # UTC sources can be a day "ahead" of local time
             freq = frequency(s)
             rows.append({"source": source, "series": name, "last": last, "age": age, "freq": freq,
                          "status": "ok" if age <= MAX_AGE[freq] else "stale"})

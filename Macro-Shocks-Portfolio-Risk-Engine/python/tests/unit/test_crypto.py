@@ -164,6 +164,14 @@ class TestAnalytics:
         assert set(view.by_quadrant["asset"]) == {"BTC", "ETH"}
         assert set(view.by_quadrant["regime"]) == {"reacceleration", "growth_scare"}
 
+    def test_price_format_and_small_negative_funding(self, data):
+        assert cr.fmt_price(81226.4) == "81,226" and cr.fmt_price(104.234) == "104.23" and cr.fmt_price(0.43621) == "0.4362"
+        t = cr.metrics(data)
+        t.loc["ADA", "funding"] = -0.3                                 # noise, not crowded shorts
+        assert not any(a.startswith("ADA") for a in cr.alerts(t, data))
+        t.loc["ADA", "funding"] = -12.0
+        assert any(a.startswith("ADA: funding negativo") for a in cr.alerts(t, data))
+
     def test_report_lines(self, data):
         text = "\n".join(cr.report_lines(cr.analyze(data), "reacceleration"))
         assert "CRYPTO" in text and "ONDO" in text and "BTC dominance 58.2%" in text and "ALERTS:" in text
@@ -177,7 +185,7 @@ class TestLiquidity:
         walk = 7_000_000 + np.cumsum(np.random.default_rng(1).normal(-1500, 20_000, 300))
         walk[-1] = walk[-14] - 50_000                                                   # falling over 13 weeks
         return {"walcl": pd.Series(walk, weeks),                                         # millions
-                "tga": pd.Series(800.0, weeks), "rrp": pd.Series(100.0, days),
+                "tga": pd.Series(800_000.0, weeks), "rrp": pd.Series(100.0, days),               # millions, billions
                 "y2": pd.Series(3.6, days), "ffr": pd.Series(3.9, days)}
 
     def test_net_liquidity_units(self):
@@ -213,6 +221,10 @@ class TestDataHealth:
         assert h.loc["ok", "status"] == "ok" and h.loc["cpi", "status"] == "ok" and h.loc["cpi", "freq"] == "mensual"
         assert h.loc["old", "status"] == "stale" and h.loc["missing", "status"] == "failed"
         assert list(h["status"])[0] == "failed"
+        ahead = data_health.check({"Cripto": {"btc": pd.Series(1.0, pd.date_range(end="2026-10-23", periods=30))}}, today)
+        assert ahead.iloc[0]["age"] == 0 and ahead.iloc[0]["status"] == "ok"          # UTC one day ahead
+        oecd = pd.Series(1.0, pd.date_range(end="2026-08-01", periods=24, freq="MS"))     # ~2.5 months late
+        assert data_health.check({"FRED": {"jp3m": oecd}}, today).iloc[0]["status"] == "ok"
         short = data_health.check({"FRED": {"two": pd.Series(1.0, pd.DatetimeIndex(["2026-08-01", "2026-09-01"]))}}, today)
         assert short.iloc[0]["status"] == "ok"                          # unknown frequency: no false alarm
 

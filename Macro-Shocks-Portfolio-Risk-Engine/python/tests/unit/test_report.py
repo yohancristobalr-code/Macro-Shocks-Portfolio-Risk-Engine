@@ -108,7 +108,7 @@ def report_fred():
                  "CBBTCUSD": pd.Series(65000.0, index=pd.date_range(end=TODAY, periods=420))})
     weeks = pd.date_range(end=TODAY, periods=330, freq="W-WED")
     data.update({"WALCL": pd.Series(7e6 + np.cumsum(rng.normal(0, 2e4, 330)), weeks),
-                 "WTREGEN": pd.Series(800.0, weeks), "RRPONTSYD": pd.Series(150.0, days[-1600:]),
+                 "WTREGEN": pd.Series(800_000.0, weeks),          # FRED: millions "RRPONTSYD": pd.Series(150.0, days[-1600:]),
                  "DFF": pd.Series(3.9, days[-1600:])})
     from .test_carry_track import series as carry_series
     cs = carry_series()
