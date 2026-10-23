@@ -129,6 +129,12 @@ class SyntheticFeedProvider(DataFeedProvider):
 # FRED Feed Provider (Free, EOD)
 # ──────────────────────────────────────────────────────────────
 
+def history_percentile(series) -> float:
+    """Share of a series' observations at or below its last value (0-1; 1 = highest ever)."""
+    values = series.dropna()
+    return float((values <= values.iloc[-1]).mean())
+
+
 def fred_client(api_key: Optional[str] = None):
     """fredapi client using ``api_key`` or the FRED_API_KEY environment variable."""
     api_key = api_key or os.getenv("FRED_API_KEY", "")
@@ -175,8 +181,14 @@ class FREDFeedProvider(DataFeedProvider):
     }
     VIX_SERIES = "VIXCLS"
     SPX_SERIES = "SP500"
+    # Weekly Fed stress indices, used as percentiles of their own history
+    STRESS_SERIES = {
+        "STLFSI4": "financial_stress_pct",       # St. Louis Fed Financial Stress Index (since 1993)
+        "NFCI": "financial_conditions_pct",      # Chicago Fed National Financial Conditions Index (since 1971)
+    }
 
     MAX_STALENESS_DAYS = 7      # Older last observations are treated as missing
+    WEEKLY_MAX_STALENESS_DAYS = 21   # weekly series are published with a lag
     SPX_LOOKBACK_DAYS = 365     # Window for the 52-week high
 
     def __init__(self, calendar: MarketCalendar, api_key: Optional[str] = None):
@@ -197,7 +209,7 @@ class FREDFeedProvider(DataFeedProvider):
             return et.date()
         return et.date() - timedelta(days=1)
 
-    def _fetch(self, series_id: str, start, cutoff):
+    def _fetch(self, series_id: str, start, cutoff, max_age_days: Optional[int] = None):
         """Valid observations of a series up to ``cutoff``, or None if unusable."""
         try:
             s = self._get_fred().get_series(
@@ -214,7 +226,7 @@ class FREDFeedProvider(DataFeedProvider):
             logger.warning("fred_series_empty", series=series_id, cutoff=str(cutoff))
             return None
         age_days = (cutoff - s.index[-1].date()).days
-        if age_days > self.MAX_STALENESS_DAYS:
+        if age_days > (max_age_days or self.MAX_STALENESS_DAYS):
             logger.warning("fred_series_stale", series=series_id,
                            last_observation=str(s.index[-1].date()), age_days=age_days)
             return None
@@ -223,7 +235,8 @@ class FREDFeedProvider(DataFeedProvider):
 
     def get_snapshot(self, as_of: Optional[datetime] = None) -> MarketStateSnapshot:
         from macro_shock.data_schema.models import (
-            CreditMarketSnapshot, EquityMarketSnapshot, VolatilitySnapshot, YieldCurveSnapshot,
+            CreditMarketSnapshot, EquityMarketSnapshot, LiquiditySnapshot, VolatilitySnapshot,
+            YieldCurveSnapshot,
         )
 
         as_of = as_of or datetime.now(timezone.utc)
@@ -263,8 +276,15 @@ class FREDFeedProvider(DataFeedProvider):
                 spx_from_52w_high=float(level / spx.max() - 1),  # decimal, <= 0
             )
 
+        stress = {}
+        for sid, field in self.STRESS_SERIES.items():
+            s = self._fetch(sid, datetime(1971, 1, 1).date(), cutoff, self.WEEKLY_MAX_STALENESS_DAYS)
+            stress[field] = history_percentile(s) if s is not None else None
+        liquidity = (LiquiditySnapshot(timestamp=as_of_utc, **stress)
+                     if any(v is not None for v in stress.values()) else None)
+
         # Same convention as MarketStateBuilder: 8 snapshot groups
-        n_available = sum(x is not None for x in (yields, credit, volatility, equity))
+        n_available = sum(x is not None for x in (yields, credit, volatility, equity, liquidity))
         if n_available == 0:
             detail = self._errors[0] if self._errors else "all series empty or stale"
             raise DataFeedError(f"No usable data from FRED through {cutoff} ({detail})")
@@ -281,11 +301,12 @@ class FREDFeedProvider(DataFeedProvider):
             credit=credit,
             volatility=volatility,
             equity=equity,
+            liquidity=liquidity,
             data_completeness=completeness,
             has_critical_data_gap=has_gap,
             gap_description=(
                 f"FRED end-of-day data through {data_through}; "
-                "liquidity, breadth, FX and commodities unavailable"
+                "breadth, FX and commodities unavailable"
             ),
         )
 

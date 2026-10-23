@@ -120,7 +120,7 @@ python -m macro_shock analyze --title "FOMC" --institution "Federal Reserve" --e
   | 65–80 | HIGH / CRITICAL | `HEDGE` |
   | ≥ 80 | CRITICAL | `EMERGENCY_DERISKING` |
 
-- **`Reliability: LOW`** es normal con FRED: solo cubre 4 de los 8 tipos de datos de mercado.
+- **`Reliability: LOW`** es normal con FRED: cubre 5 de los 8 tipos de datos de mercado (no tiene amplitud de mercado, divisas ni materias primas).
 - **`YOUR PORTFOLIO`**: ganancia o pérdida esperada, la del peor 5% de los casos, y qué posiciones pierden más en el peor escenario.
 - **`Bitcoin`**: estimado como **1.0 × el movimiento de la bolsa** (1.16 × en los escenarios extremos). Son las betas medidas con datos de FRED de 2021–2025 (1.04 y 1.16).
 
@@ -165,7 +165,8 @@ Para cada régimen desde 1990, muestra qué sectores superaron al mercado **el m
 | (nada) | Sin evidencia clara | Ignorar |
 
 - **`Credit proxy check`**: el crédito histórico se reconstruye con Moody's BAA (FRED solo publica 3 años de las series ICE que usa el motor). El porcentaje indica cuánto coincide con el crédito real. Los desacuerdos suelen darse entre los dos regímenes tranquilos.
-- **Hallazgos de la ejecución de octubre de 2026:** el único robusto fue el **momentum en `fragile_risk_on`**. Tras la tensión (`risk_off_correction`), la tecnología tendió a superar al mercado y las eléctricas a quedarse atrás: es el efecto rebote.
+- **Hallazgos de la ejecución de octubre de 2026** (antes de añadir los índices de estrés): el único robusto fue el **momentum en `fragile_risk_on`**. Tras la tensión (`risk_off_correction`), la tecnología tendió a superar al mercado y las eléctricas a quedarse atrás: es el efecto rebote. Con los índices de estrés, los regímenes se clasifican mejor y estos resultados se recalculan: consulta siempre la salida actual.
+- **Índices de estrés financiero:** el régimen usa también el índice de estrés financiero de la Fed de St. Louis (`STLFSI4`, desde 1993) y el de condiciones financieras de la Fed de Chicago (`NFCI`, desde 1971), medidos como percentil de su propia historia. Gracias a ellos el motor puede detectar el régimen de **crisis**.
 
 ### 5.5 `optimize` — pesos de cartera
 
