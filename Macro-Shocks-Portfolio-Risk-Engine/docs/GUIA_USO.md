@@ -366,13 +366,13 @@ Arriba del informe, una tabla como la que abre los informes de los bancos: **sob
 
 ### 5.10c Sectores del S&P 500 y metales
 
-**Sectores:** los 11 ETF SPDR frente al SPY, con precios diarios de **Stooq** (gratis, sin clave):
+**Sectores:** los 11 ETF SPDR frente al SPY, con precios diarios de **Yahoo Finance**; si no responde, de Nasdaq.com y después de Stooq (todos gratis, sin clave). Si ninguno responde, la sección usa las industrias de la biblioteca de French, con 1–2 meses de retraso y sin el sector inmobiliario, e indica la fuente debajo de la tabla:
 - Rentabilidad relativa a 1, 3, 6 y 12 meses; tendencia; ranking de momentum.
 - **Sensibilidades medidas** de cada sector al bono a 10 años, el petróleo, el dólar y el crédito, en periodos de 20 días durante 5 años.
 - **Mapa de escenarios**: cuánto rendiría cada sector frente al SPY si cada escenario se da con un movimiento típico de sus variables, y con los movimientos reales del último mes.
 - **Amplitud** (cuántos sectores están en tendencia alcista) y **rotación** (cíclicos frente a defensivos).
 
-**Metales:** oro y plata de Stooq (respaldo: los perpetuos XAUUSDT y XAGUSDT de Binance, que además dan el funding) y cobre de Stooq (respaldo: el precio mensual del FMI en FRED).
+**Metales:** oro, plata y cobre de los futuros de COMEX en Yahoo Finance, con toda la historia. Respaldos: Stooq; para oro y plata, los perpetuos XAUUSDT y XAGUSDT de Binance, que además dan el funding (pero solo tienen historia desde 2025, así que el cambio a 1 año sale n/d); para el cobre, el precio mensual del FMI en FRED.
 - **Oro frente a la tasa real**: distancia del oro a su relación de 3 años con el TIPS a 10 años. Más de +1 sd, caro respecto a esa relación; menos de −1 sd, barato.
 - **Ratio oro/plata** con su percentil de 10 años. Alto: miedo.
 - **Cobre/oro**: el indicador de crecimiento que siguen los bancos, con su correlación con el bono a 10 años.

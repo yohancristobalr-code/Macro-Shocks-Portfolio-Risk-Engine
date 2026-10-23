@@ -66,7 +66,8 @@ Proyecto de partida: un *fork* del repositorio "Macro Shock Risk Engine" (análi
 | Kenneth French Data Library | Sectores, factores y momentum diarios desde 1926 | No | Sí |
 | Binance (spot y futuros) | Precios cripto desde 2017, funding, interés abierto; perpetuos de oro y plata | No | Sí (cripto). Metales pendiente |
 | CoinGecko, alternative.me, DefiLlama | Capitalización y dominancia, Fear & Greed, stablecoins | No | Sí |
-| Stooq | ETF de sectores, SPY, oro, plata y cobre | No | **Pendiente** |
+| Yahoo Finance y Nasdaq.com (APIs públicas) | ETF de sectores, SPY, futuros de oro, plata y cobre | No | **Pendiente** (versión 1.2.1) |
+| Stooq | Respaldo de lo anterior | No | Bloquea las descargas automáticas (devuelve una página web) |
 | CFTC (API pública) | Posicionamiento semanal | No | **Pendiente** |
 
 ## 4. Qué falta y limitaciones conocidas
@@ -143,7 +144,7 @@ Por orden de valor, todo con fuentes gratuitas:
 - `portfolio.csv` y `reports/` son privados y también están en `.gitignore`.
 - Ninguna API usada necesita permisos de trading. Si algún día se conecta un exchange, solo con claves de lectura.
 
-**Pendiente de verificar con datos reales** (primera ejecución tras la versión 1.2): Stooq, perpetuos de metales de Binance, API de la CFTC (códigos de contrato), `VXVCLS`, las series de valoración Z.1 y el calendario de FRED. La sección «Salud de los datos» del informe lo mostrará.
+**Pendiente de verificar con datos reales** (primera ejecución tras la versión 1.2): Yahoo Finance y Nasdaq.com; los perpetuos de metales de Binance y la API de la CFTC (códigos de contrato), `VXVCLS`, las series de valoración Z.1 y el calendario de FRED. La sección «Salud de los datos» del informe lo mostrará.
 
 **Mensaje para empezar otra conversación** (copiar y pegar):
 

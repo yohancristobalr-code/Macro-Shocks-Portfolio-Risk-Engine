@@ -20,7 +20,7 @@ import pandas as pd
 
 # days since the last observation's date (monthly data are dated at the month's start; some OECD
 # series arrive ~2.5 months late)
-MAX_AGE = {"diaria": 7, "semanal": 16, "mensual": 100, "trimestral": 130}
+MAX_AGE = {"diaria": 7, "semanal": 16, "mensual": 100, "trimestral": 230}   # quarterly: dated at the start, ~2.5 months late
 
 
 def frequency(s: pd.Series) -> str:

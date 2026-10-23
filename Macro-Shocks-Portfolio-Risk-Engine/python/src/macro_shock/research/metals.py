@@ -27,10 +27,11 @@ import numpy as np
 import pandas as pd
 import structlog
 
-from macro_shock.research import crypto, stooq
+from macro_shock.research import crypto, prices as px, stooq
 
 logger = structlog.get_logger(__name__)
 
+YAHOO = {"gold": "GC=F", "silver": "SI=F", "copper": "HG=F"}          # COMEX front-month futures
 STOOQ = {"gold": "xauusd", "silver": "xagusd", "copper": "hg.f"}
 BINANCE = {"gold": "XAUUSDT", "silver": "XAGUSDT"}
 LABELS = {"gold": "Oro ($/oz)", "silver": "Plata ($/oz)", "copper": "Cobre ($/lb)"}
@@ -52,6 +53,11 @@ class MetalsData:
 def fetch(fred=None, get_text: Optional[Callable] = None, get_json: Optional[Callable] = None) -> MetalsData:
     d = MetalsData()
     for metal, sym in STOOQ.items():
+        try:
+            d.prices[metal], d.source[metal] = px.yahoo(YAHOO[metal], get_json), "Yahoo (futuro COMEX)"
+            continue
+        except Exception as e:
+            d.errors[f"{metal} (Yahoo)"] = str(e)
         try:
             d.prices[metal], d.source[metal] = stooq.daily_close(sym, get_text), "Stooq"
             continue

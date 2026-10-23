@@ -1,9 +1,10 @@
 """
 research/sectors.py
 
-S&P 500 sectors through the 11 SPDR sector ETFs, against SPY (Stooq daily
-prices). Unlike the French Data Library industries, these are the tradable
-funds and are current to yesterday.
+S&P 500 sectors through the 11 SPDR sector ETFs, against SPY: daily prices
+from Yahoo Finance, Nasdaq.com or Stooq (research/prices.py), current to
+yesterday. If none answers, the French Data Library industries stand in for
+the ETFs (no real estate; data 1-2 months old), so the section always renders.
 
   Relative strength   return vs SPY over 1, 3, 6 and 12 months; trend (above
                       the 200-day average); 12-1 month relative momentum rank
@@ -25,8 +26,8 @@ import numpy as np
 import pandas as pd
 import structlog
 
-from macro_shock.research import macro_scenario as ms
-from macro_shock.research import stooq
+from macro_shock.research import french, macro_scenario as ms
+from macro_shock.research import prices as px
 
 logger = structlog.get_logger(__name__)
 
@@ -41,16 +42,39 @@ STEP = 20                                          # trading days per period for
 BETA_YEARS = 5
 
 
-def fetch(get: Optional[Callable] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    prices, errors = {}, {}
+# French 12-industry column -> the SPDR ETF it stands in for (fallback only)
+FRENCH_ETF = {"BusEq": "XLK", "Telcm": "XLC", "Shops": "XLY", "Money": "XLF", "Manuf": "XLI", "Chems": "XLB",
+              "Enrgy": "XLE", "Hlth": "XLV", "NoDur": "XLP", "Utils": "XLU"}
+
+
+def french_fallback() -> pd.DataFrame:
+    """Price-like indexes from French daily returns, named after the ETFs; SPY = the US market."""
+    ind = french.daily_returns(french.INDUSTRIES_12)
+    mkt = french.market_return(french.daily_returns(french.FACTORS_3))
+    idx = ind.index[ind.index >= ind.index[-1] - pd.DateOffset(years=12)].intersection(mkt.index)
+    out = {etf: (1 + ind.loc[idx, col]).cumprod() * 100 for col, etf in FRENCH_ETF.items() if col in ind}
+    out[BENCH] = (1 + mkt.loc[idx]).cumprod() * 100
+    return pd.DataFrame(out)
+
+
+def fetch(get_json: Optional[Callable] = None, get_text: Optional[Callable] = None) -> Tuple[pd.DataFrame, Dict[str, str], str]:
+    """(prices, errors, source description)."""
+    prices, errors, used = {}, {}, set()
     for sym in (BENCH, *SECTORS):
         try:
-            prices[sym] = stooq.daily_close(f"{sym.lower()}.us", get)
+            prices[sym], src = px.etf_close(sym, get_json, get_text)
+            used.add(src)
         except Exception as e:
             errors[sym] = str(e)
-    if BENCH not in prices:
-        raise ValueError(f"no SPY prices from Stooq ({errors.get(BENCH)})")
-    return pd.DataFrame(prices).sort_index(), errors
+        if sym == BENCH and BENCH not in prices:
+            break                                   # no SPY: the sources are blocked, skip the other calls
+    if BENCH in prices:
+        return pd.DataFrame(prices).sort_index(), errors, " + ".join(sorted(used))
+    try:
+        p = french_fallback()
+    except Exception as e:
+        raise ValueError(f"no SPY prices ({errors.get(BENCH)}); French fallback failed too ({e})")
+    return p, {BENCH: errors.get(BENCH, "")}, f"French Data Library (sin ETF disponibles; datos hasta {p.index[-1].date()})"
 
 
 def _ret(s: pd.Series, days: int) -> float:
@@ -104,10 +128,12 @@ class SectorView:
     rotation_3m: float           # cyclicals minus defensives, 3-month return, %
     prices: pd.DataFrame
     errors: Dict[str, str]
+    source: str = ""
 
 
 def analyze(prices: pd.DataFrame, factors: Optional[pd.DataFrame] = None,
-            current_moves: Optional[pd.Series] = None, errors: Optional[Dict[str, str]] = None) -> SectorView:
+            current_moves: Optional[pd.Series] = None, errors: Optional[Dict[str, str]] = None,
+            source: str = "") -> SectorView:
     spy = prices[BENCH].dropna()
     rows = {}
     for sym, name in SECTORS.items():
@@ -131,4 +157,4 @@ def analyze(prices: pd.DataFrame, factors: Optional[pd.DataFrame] = None,
     dfn = [c for c in DEFENSIVE if c in prices]
     rotation = float(np.mean([_ret(prices[c], 63) for c in cyc]) - np.mean([_ret(prices[c], 63) for c in dfn])) \
         if cyc and dfn else np.nan
-    return SectorView(t, scen, float(trend.mean()) if len(trend) else np.nan, rotation, prices, errors or {})
+    return SectorView(t, scen, float(trend.mean()) if len(trend) else np.nan, rotation, prices, errors or {}, source)
