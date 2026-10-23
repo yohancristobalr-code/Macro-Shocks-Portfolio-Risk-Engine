@@ -497,6 +497,11 @@ def cmd_daily(args: argparse.Namespace) -> None:
         alert_lines += carry.alerts(carry.assess(carry.fetch(fred_client(), today)))
     except Exception:
         pass                                    # the carry alert is informative only
+    try:
+        from macro_shock.research import view
+        alert_lines += view.vix_alert(view.vix_term(fred_client(), today))
+    except Exception:
+        pass                                    # so is the VIX term structure
 
     sector_lines = None
     if not args.quick:
