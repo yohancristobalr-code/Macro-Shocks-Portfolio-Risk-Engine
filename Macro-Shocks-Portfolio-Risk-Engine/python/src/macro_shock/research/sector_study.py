@@ -61,7 +61,7 @@ def run(fred, start: date, horizon: int = 21, end: Optional[date] = None) -> Sec
     fwd, labels = sr.window_returns(style_daily, regimes, None, horizon)
     styles = sr.split_robustness(fwd, labels, split)
 
-    latest = max(s.index[-1] for k, s in series.items() if k != "baa")
+    latest = max(series[k].index[-1] for k in ("vix", "y2", "y10", "hy", "ig") if len(series[k]))
     now_real = rh.regime_history(series, [latest], "ice").iloc[0]
     now_proxy = rh.regime_history(series, [latest], "proxy").iloc[0]
 

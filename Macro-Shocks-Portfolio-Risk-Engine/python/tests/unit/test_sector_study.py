@@ -49,6 +49,32 @@ class TestClassify:
         assert rh.classify(scorer, when, **CALM, hy_bps=260, ig_bps=55) == "risk_on_expansion"
         assert rh.classify(scorer, when, **STRESSED, hy_bps=900, ig_bps=250) == "risk_off_correction"
 
+    def test_crisis_needs_the_stress_index(self):
+        scorer = MarketVulnerabilityScorer()
+        when = pd.Timestamp("2008-10-10")
+        panic = dict(vix=70.0, y2=1.5, y10=3.8, hy_bps=1500, ig_bps=500)
+        assert rh.classify(scorer, when, **panic) == "risk_off_correction"          # no liquidity data
+        assert rh.classify(scorer, when, **panic, stress_pct=0.99, conditions_pct=0.98) == "crisis"
+
+    def test_stress_percentiles_raise_vulnerability(self):
+        scorer = MarketVulnerabilityScorer()
+        from macro_shock.data_schema.models import LiquiditySnapshot
+        from datetime import datetime, timezone
+        ts = datetime(2024, 3, 12, tzinfo=timezone.utc)
+        calm = rh.classify(scorer, pd.Timestamp("2024-03-12"), **CALM, hy_bps=330, ig_bps=95,
+                           stress_pct=0.05, conditions_pct=0.05)
+        tense = rh.classify(scorer, pd.Timestamp("2024-03-12"), **CALM, hy_bps=330, ig_bps=95,
+                            stress_pct=0.95, conditions_pct=0.95)
+        order = ["risk_on_expansion", "fragile_risk_on", "risk_off_correction", "crisis"]
+        assert order.index(tense) > order.index(calm)
+
+
+class TestHistoryPercentiles:
+
+    def test_rank_within_history(self):
+        s = pd.Series([3.0, 1.0, 2.0, 2.0], index=pd.date_range("2024-01-05", periods=4, freq="W-FRI"))
+        assert list(rh.history_percentiles(s)) == [1.0, 0.25, 0.75, 0.75]
+
 
 def fred_data(start="2014-01-01", end="2024-06-28", stress_from="2020-02-20", stress_to="2020-06-30",
               ice_from="2021-01-01", ice_matches_proxy=False):
@@ -114,6 +140,29 @@ class TestRegimeHistory:
         assert check["since"] == date(2021, 1, 1)
         assert check["n"] > 100
         assert 0.0 <= check["agreement"] <= 1.0
+
+    def test_stress_index_lets_history_reach_crisis(self):
+        data = fred_data(ice_from="2014-01-01")
+        weeks = pd.date_range("1994-01-07", "2024-06-28", freq="W-FRI")
+        crisis = (weeks >= "2020-03-01") & (weeks <= "2020-05-31")
+        calm_2019 = weeks.year == 2019
+        noise = np.random.default_rng(7).normal(0, 0.2, len(weeks))
+        # Ordinary weeks wobble around -0.5; 2019 is unusually calm; spring 2020 is extreme stress
+        stress = np.where(crisis, 5.0, np.where(calm_2019, -1.5, -0.5 + noise))
+        data["STLFSI4"] = pd.Series(stress, index=weeks)
+        data["NFCI"] = pd.Series(stress / 5, index=weeks)
+        # Make the spell a full-blown panic: VIX 70 and very wide credit
+        for sid, v in (("VIXCLS", 70.0), ("BAMLH0A0HYM2", 15.0), ("BAMLC0A0CM", 5.0)):
+            s = data[sid]
+            data[sid] = s.where(~((s.index >= "2020-03-02") & (s.index <= "2020-05-29")), v)
+        series = rh.fetch_series(FakeFred(data), date(2014, 1, 1), date(2024, 6, 28))
+        labels = rh.regime_history(series, pd.to_datetime(["2019-06-03", "2020-04-01"]), "ice")
+        assert list(labels) == ["risk_on_expansion", "crisis"]
+
+    def test_missing_stress_indices_do_not_stop_the_history(self):
+        series = self._series()            # fred_data() has no STLFSI4/NFCI
+        assert series["stress"].empty and series["conditions"].empty
+        assert rh.regime_history(series, [pd.Timestamp("2020-04-01")]).iloc[0] == "risk_off_correction"
 
     def test_proxy_agrees_fully_when_ice_is_its_quantile_image(self):
         check = rh.credit_proxy_agreement(self._series(ice_matches_proxy=True))

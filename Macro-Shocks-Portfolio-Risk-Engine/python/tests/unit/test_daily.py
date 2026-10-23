@@ -108,6 +108,20 @@ class TestDailyCommand:
         assert (tmp_path / f"daily_{TODAY.isoformat()}.txt").exists()
         assert len(daily.read_log(tmp_path / "daily_log.csv")) == 1
 
+    def test_liquidity_and_funding_components_shown_when_available(self, monkeypatch, capsys, tmp_path):
+        data = fred_today()
+        weeks = pd.date_range(end=TODAY, periods=1500, freq="W-FRI")
+        data["STLFSI4"] = pd.Series(np.linspace(-1, 1, len(weeks)), index=weeks)
+        data["NFCI"] = pd.Series(np.linspace(1, -1, len(weeks)), index=weeks)
+        self._run(monkeypatch, tmp_path, "--quick", data=data)
+        out = capsys.readouterr().out
+        assert "liquidity 1.00" in out and "funding 0.00" in out
+
+    def test_components_without_stress_indices(self, monkeypatch, capsys, tmp_path):
+        self._run(monkeypatch, tmp_path, "--quick")
+        out = capsys.readouterr().out
+        assert "Components: volatility" in out and "liquidity" not in out
+
     def test_rerun_same_day_keeps_one_row(self, monkeypatch, capsys, tmp_path):
         self._run(monkeypatch, tmp_path, "--quick")
         self._run(monkeypatch, tmp_path, "--quick")

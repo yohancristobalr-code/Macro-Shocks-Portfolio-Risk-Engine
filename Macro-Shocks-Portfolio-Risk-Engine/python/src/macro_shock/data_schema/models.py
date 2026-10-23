@@ -142,6 +142,9 @@ class LiquiditySnapshot(BaseModel):
     high_yield_bid_ask_bps: Optional[float] = None
     on_the_run_off_the_run_spread: Optional[float] = None  # bps
     composite_liquidity_score: Optional[float] = None  # 0-100, lower = worse
+    # Percentile (0-1) of a weekly Fed index within its own history; 1 = most stressed
+    financial_stress_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)      # St. Louis Fed STLFSI4
+    financial_conditions_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # Chicago Fed NFCI
     stale: bool = False
 
 

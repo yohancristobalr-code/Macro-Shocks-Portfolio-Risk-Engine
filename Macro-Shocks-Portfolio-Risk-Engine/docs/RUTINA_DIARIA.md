@@ -54,15 +54,16 @@ Los datos de FRED corresponden al **cierre del día hábil anterior**, así que 
 
 ### 1.2 Qué significa cada régimen
 
-Con los datos de FRED, el motor distingue tres regímenes. El de crisis necesita datos de liquidez que FRED no ofrece.
+Con los datos de FRED, el motor distingue cuatro regímenes. El de **crisis** es posible gracias a los índices de estrés financiero de la Fed (`STLFSI4` y `NFCI`), que aportan los componentes de liquidez y financiación.
 
-| Régimen | Mercado | Evidencia histórica desde 1990 (ejecución de octubre de 2026) |
+| Régimen | Mercado | Evidencia histórica desde 1990 (ejecución de octubre de 2026, antes de los índices de estrés) |
 |---|---|---|
 | `risk_on_expansion` | Tranquilo: VIX bajo, crédito barato | Momentum `*` favorecido; pequeñas empresas y consumo duradero `*` rezagados |
 | `fragile_risk_on` | Calma aparente, con algo de tensión | **Momentum `**` favorecido** (el único resultado robusto); telecom `*` rezagado |
 | `risk_off_correction` | Tensión: VIX alto y/o crédito caro | Tecnología `*` favorecida y eléctricas `*` rezagadas el mes siguiente: **efecto rebote**. El momentum pierde su ventaja |
+| `crisis` | Pánico: VIX extremo, crédito muy caro y estrés financiero en máximos históricos | Ver `sector-study`: hay pocos periodos (2008, 2020), así que la evidencia será escasa |
 
-Esta tabla es una foto de octubre de 2026. **La referencia actualizada es siempre la salida de `sector-study`**, que se recalcula con cada ejecución.
+Esta tabla es una foto de octubre de 2026. **La referencia actualizada es siempre la salida de `sector-study`**, que se recalcula con cada ejecución. Desde que el motor usa los índices de estrés, los regímenes históricos se reclasifican y los resultados pueden cambiar.
 
 ---
 

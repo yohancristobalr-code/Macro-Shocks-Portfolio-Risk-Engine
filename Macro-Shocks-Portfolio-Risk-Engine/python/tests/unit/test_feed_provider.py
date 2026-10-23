@@ -11,6 +11,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -130,6 +131,28 @@ class TestFREDFeedProvider:
         assert snap.volatility is None
         assert snap.yields is not None
         assert snap.data_completeness == pytest.approx(3 / 8)
+
+    def test_stress_indices_become_history_percentiles(self):
+        data = default_data()
+        weeks = pd.date_range("1994-01-07", "2024-03-08", freq="W-FRI")
+        values = np.linspace(-1.0, 1.0, len(weeks))
+        data["STLFSI4"] = pd.Series(values, index=weeks)                    # last value is the highest
+        data["NFCI"] = pd.Series(values[::-1], index=weeks)                  # last value is the lowest
+        provider, _ = make_provider(data)
+        snap = provider.get_snapshot(as_of=DURING_SESSION)
+        assert snap.liquidity.financial_stress_pct == pytest.approx(1.0)
+        assert snap.liquidity.financial_conditions_pct == pytest.approx(1 / len(weeks))
+        assert snap.data_completeness == pytest.approx(5 / 8)
+        assert "liquidity" not in snap.gap_description
+
+    def test_weekly_index_allows_three_weeks_of_lag(self):
+        data = default_data()
+        data["STLFSI4"] = pd.Series([0.1, 0.2], index=pd.to_datetime(["2024-02-16", "2024-02-23"]))  # 17 days old
+        data["NFCI"] = pd.Series([0.1, 0.2], index=pd.to_datetime(["2024-01-26", "2024-02-02"]))     # 38 days old
+        provider, _ = make_provider(data)
+        snap = provider.get_snapshot(as_of=DURING_SESSION)
+        assert snap.liquidity.financial_stress_pct == pytest.approx(1.0)
+        assert snap.liquidity.financial_conditions_pct is None
 
     def test_discontinued_ted_spread_is_not_requested(self):
         provider, fake = make_provider()

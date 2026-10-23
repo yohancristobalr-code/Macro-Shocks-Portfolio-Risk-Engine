@@ -435,8 +435,11 @@ def cmd_daily(args: argparse.Namespace) -> None:
     vuln = MarketVulnerabilityScorer().score(snap, log=False)
     found = re.search(r"through (\d{4}-\d{2}-\d{2})", snap.gap_description or "")
     data_through = date.fromisoformat(found.group(1)) if found else today
-    components = {"volatility": vuln.volatility_vulnerability, "credit": vuln.credit_vulnerability,
-                  "curve": vuln.yield_curve_vulnerability}
+    all_components = {"volatility": vuln.volatility_vulnerability, "credit": vuln.credit_vulnerability,
+                      "curve": vuln.yield_curve_vulnerability, "liquidity": vuln.liquidity_vulnerability,
+                      "funding": vuln.funding_vulnerability}
+    named = {"curve": "yield_curve"}
+    components = {k: v for k, v in all_components.items() if named.get(k, k) not in vuln.missing_components}
     row = daily.snapshot_row(today, data_through, vuln.regime.value, vuln.composite, snap, btc)
 
     reports = Path(args.reports_dir) if args.reports_dir else _PROJECT_ROOT / "reports"
