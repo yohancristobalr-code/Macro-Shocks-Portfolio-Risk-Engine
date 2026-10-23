@@ -193,51 +193,75 @@ def optimize(
     )
 
 
+def drawdown_on(returns: pd.DataFrame, weights: pd.Series) -> Tuple[float, date]:
+    """
+    Maximum drawdown and its trough date for ``weights`` applied to ``returns``.
+    Assets missing from ``returns`` (Bitcoin before 2015) are dropped and the rest
+    renormalized.
+    """
+    w = weights.reindex(returns.columns).fillna(0.0)
+    w = w / w.sum()
+    growth = (1 + returns @ w).cumprod()
+    dd = growth / growth.cummax() - 1
+    return float(dd.min()), dd.idxmin().date()
+
+
 def drawdown_frontier(
     returns: pd.DataFrame, assets: Dict[str, Asset], btc: float = 0.03,
     stock_shares=tuple(np.round(np.arange(1.0, 0.25, -0.05), 2)),
+    long_returns: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Mixes from all-stocks down to mostly bonds, with each one's actual weights
-    and historical volatility, return and maximum drawdown.
+    and historical volatility, return and maximum drawdown. With ``long_returns``
+    (stocks and bonds since 1990) each mix's drawdown over that longer history is
+    added as ``max_drawdown_long``.
     """
     rows = []
     for share in stock_shares:
         w = mix_weights(returns, assets, float(share), btc)
         cls = class_summary(w, w, assets)["weight"]
-        rows.append({"stocks": float(share), **{f"weight_{c}": float(cls.get(c, 0.0)) for c in CLASSES},
-                     **opt.portfolio_stats(returns, w)})
+        row = {"stocks": float(share), **{f"weight_{c}": float(cls.get(c, 0.0)) for c in CLASSES},
+               **opt.portfolio_stats(returns, w)}
+        if long_returns is not None:
+            row["max_drawdown_long"] = drawdown_on(long_returns, w)[0]
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
 def choose_for_drawdown(frontier: pd.DataFrame, limit: float) -> Tuple[pd.Series, bool]:
     """
-    Most stock-heavy mix whose historical maximum drawdown stays within ``limit``
-    (e.g. 0.25 for -25%). Falls back to the least risky one, flagged False.
+    Most stock-heavy mix whose maximum drawdown stays within ``limit`` (e.g. 0.25
+    for -25%) in the recent window and, when the frontier has it, since 1990.
+    Falls back to the least risky one, flagged False.
     """
-    ok = frontier[frontier["max_drawdown"] >= -abs(limit)]
+    worst = frontier["max_drawdown"]
+    if "max_drawdown_long" in frontier:
+        worst = np.minimum(worst, frontier["max_drawdown_long"])
+    ok = frontier[worst >= -abs(limit)]
     if ok.empty:
         return frontier.loc[frontier["stocks"].idxmin()], False
     return ok.loc[ok["stocks"].idxmax()], True
 
 
+def long_returns(fred, industries: pd.DataFrame, market: pd.Series, start: date = date(1990, 1, 2)) -> pd.DataFrame:
+    """Daily stock-sector and Treasury returns over the longest history available (no Bitcoin)."""
+    returns, _ = build_universe(fred, industries, market, start, industries.index[-1].date(), include_btc=False)
+    return returns
+
+
 def long_history_drawdown(
     fred, industries: pd.DataFrame, market: pd.Series, weights: pd.Series, assets: Dict[str, Asset],
-    start: date = date(1990, 1, 2),
+    start: date = date(1990, 1, 2), returns: Optional[pd.DataFrame] = None,
 ) -> Dict[str, object]:
     """
     Maximum drawdown of the same equity and bond weights over the longest history
     available (Bitcoin left out and the rest renormalized), so the check covers
     the 2000-02 and 2008 bear markets the 10-year window misses.
     """
-    end = industries.index[-1].date()
-    returns, _ = build_universe(fred, industries, market, start, end, include_btc=False)
-    w = weights.reindex(returns.columns).fillna(0.0)
-    w = w / w.sum()
-    r = returns @ w
-    growth = (1 + r).cumprod()
-    dd = growth / growth.cummax() - 1
-    return {"max_drawdown": float(dd.min()), "trough": dd.idxmin().date(),
+    returns = returns if returns is not None else long_returns(fred, industries, market, start)
+    dd, trough = drawdown_on(returns, weights)
+    return {"max_drawdown": dd, "trough": trough,
             "start": returns.index[0].date(), "end": returns.index[-1].date()}
 
 
