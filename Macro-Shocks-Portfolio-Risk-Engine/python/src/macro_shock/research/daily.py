@@ -6,8 +6,8 @@ against the previous run, and a dated report plus a CSV log.
 
 Alert thresholds are deliberately few and simple so they are easy to act on:
 a regime change, VIX up 5+ points, HY spreads 50+ bps wider than the previous
-run, and the S&P 500 10%+ below its 52-week high. Energy price alerts come
-from research/cpi_nowcast.py.
+run, the S&P 500 10%+ below its 52-week high, and a change of macro quadrant.
+Energy price alerts come from research/cpi_nowcast.py.
 """
 
 from __future__ import annotations
@@ -22,8 +22,9 @@ import pandas as pd
 
 LOG_COLUMNS = ["run_date", "data_through", "regime", "vulnerability", "vix", "hy_bps", "ig_bps",
                "slope_2_10_bps", "y10", "spx_vs_high_pct", "btc",
-               "wti", "brent", "henry_hub", "gasoline_retail", "diesel_retail", "crack_321"]
-ENERGY_COLUMNS = LOG_COLUMNS[-6:]
+               "wti", "brent", "henry_hub", "gasoline_retail", "diesel_retail", "crack_321",
+               "scenario", "quadrant"]
+ENERGY_COLUMNS = ["wti", "brent", "henry_hub", "gasoline_retail", "diesel_retail", "crack_321"]
 
 VIX_JUMP = 5.0          # points
 HY_WIDENING = 50.0      # bps
@@ -49,6 +50,8 @@ def snapshot_row(run_date: date, data_through: date, regime: str, vulnerability:
         "spx_vs_high_pct": dd * 100 if not np.isnan(dd) else np.nan,
         "btc": btc if btc is not None else np.nan,
         **{k: (energy or {}).get(k, np.nan) for k in ENERGY_COLUMNS},
+        "scenario": None,       # set by the daily command from research/macro_scenario.py
+        "quadrant": None,       # and research/growth.py
     }
 
 
@@ -83,6 +86,9 @@ def alerts(today: Dict[str, object], previous: Optional[Dict[str, object]]) -> L
     if today["regime"] != previous.get("regime"):
         out.insert(0, f"REGIME CHANGE: {previous.get('regime')} -> {today['regime']} "
                       f"(previous run {previous.get('run_date')})")
+    now_q, before_q = today.get("quadrant"), previous.get("quadrant")
+    if isinstance(now_q, str) and isinstance(before_q, str) and now_q != before_q:
+        out.append(f"MACRO QUADRANT CHANGE: {before_q} -> {now_q} (run `macro` for the sectors in {now_q})")
     for key, limit, label, unit in (("vix", VIX_JUMP, "VIX", " pts"), ("hy_bps", HY_WIDENING, "HY spread", " bps")):
         now, before = today.get(key), previous.get(key)
         if None in (now, before) or pd.isna(now) or pd.isna(before):
@@ -121,7 +127,7 @@ def energy_line(row: Dict[str, object]) -> Optional[str]:
 
 def render(row: Dict[str, object], alert_lines: List[str], previous: Optional[Dict[str, object]],
            components: Dict[str, float], sector_lines: Optional[List[str]],
-           nowcast_line: Optional[str] = None) -> List[str]:
+           nowcast_line: Optional[str] = None, macro_line: Optional[str] = None) -> List[str]:
     sep = "─" * 72
     fmt = lambda v, spec: "n/a" if v is None or pd.isna(v) else format(v, spec)
     lines = [sep, f"  DAILY MARKET REPORT — run {row['run_date']}, FRED data through {row['data_through']}", sep,
@@ -137,6 +143,8 @@ def render(row: Dict[str, object], alert_lines: List[str], previous: Optional[Di
         lines.append(energy + "   ($/bbl, $/MMBtu, $/gal)")
     if nowcast_line:
         lines.append(nowcast_line)
+    if macro_line:
+        lines.append(macro_line)
     if previous is not None:
         lines.append(f"  Previous run {previous.get('run_date')}: regime {previous.get('regime')}, "
                      f"VIX {fmt(previous.get('vix'), '.1f')}, HY {fmt(previous.get('hy_bps'), '.0f')}bps")

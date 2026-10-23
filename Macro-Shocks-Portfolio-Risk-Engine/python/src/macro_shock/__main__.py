@@ -432,7 +432,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
     from macro_shock.data.feed_provider import DataFeedError, FREDFeedProvider, fred_client
     from macro_shock.event_detection.calendar import MarketCalendar
     from macro_shock.market_context.vulnerability_scorer import MarketVulnerabilityScorer
-    from macro_shock.research import cpi_nowcast, daily, sector_study
+    from macro_shock.research import cpi_nowcast, daily, growth, macro, macro_scenario, sector_study
 
     today = date.today()
     try:
@@ -474,6 +474,19 @@ def cmd_daily(args: argparse.Namespace) -> None:
             pass                                # energy prices are informative only
     row = daily.snapshot_row(today, data_through, vuln.regime.value, vuln.composite, snap, btc,
                              cpi_nowcast.latest_levels(prices) if prices else None)
+    market, quadrant = None, None
+    try:
+        market = macro_scenario.assess(macro_scenario.fetch(fred_client(), today))
+    except Exception:
+        pass                                    # the macro line is informative only
+    if not args.quick:
+        try:
+            series = growth.fetch(fred_client(), growth.FULL_HISTORY_START, today)
+            quadrant = growth.axes_at(growth.signals(series), today, lagged=False).quadrant
+        except Exception:
+            pass
+    row["scenario"] = market.best if market is not None else None
+    row["quadrant"] = quadrant
 
     reports = Path(args.reports_dir) if args.reports_dir else _PROJECT_ROOT / "reports"
     log_path = reports / "daily_log.csv"
@@ -489,7 +502,8 @@ def cmd_daily(args: argparse.Namespace) -> None:
         except Exception as e:
             sector_lines = [f"    (sector study unavailable today: {e})"]
 
-    lines = daily.render(row, alert_lines, previous, components, sector_lines, nowcast_line)
+    lines = daily.render(row, alert_lines, previous, components, sector_lines, nowcast_line,
+                         macro.summary_line(market, quadrant))
     print("\n" + "\n".join(lines))
     daily.write_log(log, row, log_path)
     report = reports / f"daily_{today.isoformat()}.txt"
@@ -518,6 +532,29 @@ def cmd_nowcast(args: argparse.Namespace) -> None:
     if args.output:
         nc.backtest.to_csv(args.output, index=False)
         print(f"Backtest table written to: {args.output}")
+
+
+# ──────────────────────────────────────────────────────────────
+# Command: macro
+# ──────────────────────────────────────────────────────────────
+
+def cmd_macro(args: argparse.Namespace) -> None:
+    """What markets price, growth, inflation, the macro quadrant and its sectors."""
+    from datetime import date
+
+    from macro_shock.data.feed_provider import DataFeedError, fred_client
+    from macro_shock.research import macro
+
+    try:
+        report = macro.run(fred_client(), window=args.window, sectors=not args.quick,
+                           study_start=date.fromisoformat(args.start))
+    except (DataFeedError, ValueError) as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: could not build the macro report ({e}). FRED may be down; try again later.")
+        sys.exit(1)
+    print("\n" + "\n".join(macro.report_lines(report)) + "\n")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -939,6 +976,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_day.add_argument("--reports-dir", default=None,
                        help="Folder for reports and the CSV log (default: <project>/reports)")
     p_day.set_defaults(func=cmd_daily)
+
+    p_mac = sub.add_parser("macro", help="Scenario markets price, growth, inflation and the macro quadrant "
+                                         "(needs FRED_API_KEY)")
+    p_mac.add_argument("--window", type=int, default=20, help="Trading days for the market moves (default 20)")
+    p_mac.add_argument("--quick", action="store_true",
+                       help="Skip the sectors-by-quadrant study (no French Data Library download)")
+    p_mac.add_argument("--start", default="1972-01-01", help="First date of the sectors-by-quadrant study")
+    p_mac.set_defaults(func=cmd_macro)
 
     p_now = sub.add_parser("nowcast", help="Next US CPI from energy prices and CPI sub-items (needs FRED_API_KEY)")
     p_now.add_argument("--output", default=None, help="Write the month-by-month backtest to a CSV file")
