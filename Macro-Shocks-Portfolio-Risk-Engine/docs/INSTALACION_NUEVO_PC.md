@@ -39,18 +39,21 @@ Doble clic en **"Informe Macro"** del escritorio. En 1–3 minutos se abre en el
 
 | Sección | Qué responde |
 |---|---|
+| Visión sistemática | Sobreponderar / neutral / infraponderar por activo, y los sectores preferidos y a evitar |
 | Lectura ejecutiva | Las conclusiones del día, generadas a partir de los números |
 | 1. Qué descuenta el mercado | Escenario confirmado o invalidado y qué vigilar |
 | 2. Crecimiento, inflación y cuadrante | Indicadores adelantados, pista del PMI y cuadrante macro |
 | 3. Energía e IPC | Nowcast del IPC por subpartida, su validación y gráficas de precios |
 | 4. Régimen de riesgo | Componentes de vulnerabilidad, VIX, crédito y bolsa |
 | 5. Evidencia sectorial | Sectores y estilos con evidencia `**`/`*` en el régimen y en el cuadrante, y su convergencia |
-| 6. Análogos y modelo | Los meses más parecidos desde 1990 y qué pasó después; modelo predictivo con su R² fuera de muestra |
-| 7. Cripto | 10 monedas, apalancamiento (funding), sentimiento, stablecoins y régimen cripto |
-| 8. Liquidez de la Fed | Liquidez neta, expectativas de tipos y su relación medida con el Nasdaq y BTC |
-| 9. Carry del yen | Riesgo de desmontaje del carry trade y qué pasó en episodios anteriores |
-| 10. Historial de aciertos | Cuánto acertaron las previsiones de informes anteriores |
-| 11. Salud de los datos | Qué series están al día y cuáles fallaron |
+| 6. Sectores del S&P 500 | Los 11 sectores frente al SPY, sus sensibilidades a la macro y el mapa de escenarios |
+| 7. Metales | Oro, plata y cobre; el oro frente a la tasa real; los ratios oro/plata y cobre/oro |
+| 8. Análogos y modelo | Los meses más parecidos desde 1990 y qué pasó después; modelo predictivo con su R² fuera de muestra |
+| 9. Cripto | 10 monedas, apalancamiento (funding), sentimiento, stablecoins y régimen cripto |
+| 10. Liquidez de la Fed | Liquidez neta, expectativas de tipos y su relación medida con el Nasdaq y BTC |
+| 11. Carry del yen | Riesgo de desmontaje del carry trade y qué pasó en episodios anteriores |
+| 12. Historial de aciertos | Cuánto acertaron las previsiones de informes anteriores |
+| 13. Salud de los datos | Qué series están al día y cuáles fallaron |
 
 Cada informe se guarda en `reports\informe_AAAA-MM-DD.html`, así que tendrás un historial que puedes comparar.
 

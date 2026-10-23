@@ -26,6 +26,7 @@ from macro_shock.research import analogs as an
 from macro_shock.research import charts, cpi_nowcast, growth, macro, macro_scenario as ms, sector_study
 from macro_shock.research import carry as cy, crypto as cr, data_health, french, liquidity as lq
 from macro_shock.research import track_record as tr
+from macro_shock.research import metals as mt, sectors as sc, view as vw
 
 logger = structlog.get_logger(__name__)
 
@@ -87,6 +88,10 @@ class Context:
     carry: Optional[cy.Carry] = None
     track_log: Optional[pd.DataFrame] = None
     track_scored: Optional[pd.DataFrame] = None
+    sectors: Optional[sc.SectorView] = None
+    metals: Optional[mt.MetalsView] = None
+    vix_term: Optional[pd.DataFrame] = None
+    asset_view: Optional[pd.DataFrame] = None
 
 
 def _try(ctx: Context, name: str, fn):
@@ -172,6 +177,19 @@ def gather(fred, today: Optional[date] = None, quick: bool = False, track_path=N
         ctx.carry = cy.assess(ctx.carry_series, assets)
     _try(ctx, "carry del yen", yen_carry)
 
+    def sp_sectors():
+        prices, errors = sc.fetch()
+        factors = ms.levels(ctx.market_series) if ctx.market_series else None
+        moves = ctx.market.moves["change"] if ctx.market is not None else None
+        ctx.sectors = sc.analyze(prices, factors, moves, errors)
+    _try(ctx, "sectores S&P 500", sp_sectors)
+
+    def metals_axis():
+        ctx.metals = mt.analyze(mt.fetch(fred), ctx.market_series.get("real10"), ctx.market_series.get("y10"))
+    _try(ctx, "metales", metals_axis)
+    ctx.vix_term = _try(ctx, "estructura del VIX", lambda: vw.vix_term(fred, ctx.today))
+    _try(ctx, "visión por activo", lambda: _asset_view(ctx))
+
     if quick:
         return finish(ctx, track_path)
     ctx.regime_study = _try(ctx, "sectores por régimen", lambda: sector_study.run(fred, date(1990, 1, 1)))
@@ -187,6 +205,33 @@ def gather(fred, today: Optional[date] = None, quick: bool = False, track_path=N
             ctx.model = an.model(df, today_state)
         _try(ctx, "análogos y modelo", history)
     return finish(ctx, track_path)
+
+
+def _asset_view(ctx: Context) -> None:
+    s = ctx.market_series
+    metal = ctx.metals.data.prices if ctx.metals is not None else {}
+    oil = ctx.nowcast.prices.get("wti") if ctx.nowcast is not None else s.get("oil")
+    series = {"equities": s.get("equities"), "bonds": s.get("y10"), "credit": s.get("credit"),
+              "gold": metal.get("gold"), "copper": metal.get("copper"), "oil": oil, "dollar": s.get("dollar"),
+              "bitcoin": ctx.crypto.data.prices["BTC"].dropna() if ctx.crypto is not None else None}
+    m = ctx.market
+    best = m.best if m is not None else None
+    ctx.asset_view = vw.asset_view(series, best, m.status(best) if best else None,
+                                   ctx.axes.quadrant if ctx.axes else None)
+
+
+def sector_picks(ctx: Context):
+    """(top 3, bottom 3) sectors: average rank of 12-1 momentum and expected return in the scenario priced."""
+    v = ctx.sectors
+    if v is None or v.table.empty:
+        return [], []
+    t = v.table.copy()
+    rank = t["momentum"].astype(float).rank(ascending=False)
+    m = ctx.market
+    if m is not None and m.best and m.status(m.best) in ("CONFIRMED", "partial") and m.best in v.scenarios:
+        rank = (rank + v.scenarios[m.best].reindex(t.index).rank(ascending=False)) / 2
+    order = rank.sort_values().index
+    return list(order[:3]), list(order[-3:][::-1])
 
 
 def finish(ctx: Context, track_path) -> Context:
@@ -205,6 +250,11 @@ def health(ctx: Context) -> pd.DataFrame:
     """Freshness of every series gathered (no extra downloads)."""
     sources = {"FRED mercado": ctx.market_series, "FRED crecimiento": ctx.growth_series,
                "FRED liquidez": ctx.liq_series, "FRED carry del yen": ctx.carry_series}
+    if ctx.sectors is not None:
+        sources["Stooq: sectores"] = {k: ctx.sectors.prices[k] for k in ctx.sectors.prices}
+        sources["Stooq: sectores"].update({k: pd.Series(dtype=float) for k in ctx.sectors.errors})
+    if ctx.metals is not None:
+        sources["Metales"] = {f"{k} ({ctx.metals.data.source[k]})": v for k, v in ctx.metals.data.prices.items()}
     if ctx.nowcast is not None:
         sources["FRED energía"] = ctx.nowcast.prices
     if ctx.crypto is not None:
@@ -284,6 +334,27 @@ def convergence(ctx: Context) -> List[str]:
 
 def executive(ctx: Context) -> List[str]:
     out = []
+    av = ctx.asset_view
+    if av is not None and len(av):
+        ow = av[av["view"] == "Sobreponderar"]["asset"].tolist()
+        uw = av[av["view"] == "Infraponderar"]["asset"].tolist()
+        out.append("<b>Visión sistemática:</b> sobreponderar " + (", ".join(ow) or "nada")
+                   + "; infraponderar " + (", ".join(uw) or "nada") + ".")
+    top, bottom = sector_picks(ctx)
+    if top:
+        name = lambda k: ctx.sectors.table.at[k, "name"]
+        out.append(f"<b>Sectores S&P 500:</b> preferidos {', '.join(f'{name(k)} ({k})' for k in top)}; "
+                   f"evitar {', '.join(f'{name(k)} ({k})' for k in bottom)}. Amplitud: "
+                   f"{ctx.sectors.breadth:.0%} de los sectores en tendencia alcista; cíclicos vs defensivos "
+                   f"{ctx.sectors.rotation_3m:+.1f}% en 3 meses.")
+    mv = ctx.metals
+    if mv is not None and mv.gold_vs_real:
+        g = mv.gold_vs_real
+        out.append(f"<b>Oro:</b> {g['gap_pct']:+.0f}% frente a lo que justificaría la tasa real ({g['gap_sd']:+.1f} sd; "
+                   f"{'caro' if g['gap_sd'] > 1 else 'barato' if g['gap_sd'] < -1 else 'en línea'} respecto a esa relación)"
+                   + (f"; ratio oro/plata {mv.gold_silver.iloc[-1]:.0f}" if mv.gold_silver is not None else "") + ".")
+    for a in vw.vix_alert(ctx.vix_term):
+        out.append(f"<b>Volatilidad:</b> {escape(a)}.")
     if ctx.regime:
         top = max(ctx.components.items(), key=lambda kv: kv[1]) if ctx.components else None
         out.append(f"<b>Riesgo:</b> régimen <b>{REGIME_ES.get(ctx.regime, ctx.regime)}</b> con vulnerabilidad "
@@ -575,13 +646,19 @@ def section_risk(ctx: Context) -> str:
         return _missing(ctx, "riesgo")
     s = ctx.market_series
     comps = "".join(_kpi(COMPONENT_ES.get(k, k).capitalize(), _num(v, ".2f")) for k, v in ctx.components.items())
+    vt = ctx.vix_term
+    if vt is not None and len(vt):
+        comps += _kpi("VIX / VIX 3 meses", f"{vt['ratio'].iloc[-1]:.2f} " + ('<span class="tag no">invertida</span>'
+                      if vt["ratio"].iloc[-1] >= 1 else '<span class="tag ok">normal</span>'))
     hy = s.get("credit", pd.Series(dtype=float)) * 100
     risk = charts.line_chart({"VIX": _last_years(s.get("vix", pd.Series(dtype=float)), 2),
                               "Spread HY (pb/10)": _last_years(hy / 10, 2)}, "Volatilidad y crédito")
     norm = lambda x: _last_years(x, 2) / _last_years(x, 2).iloc[0] * 100 if len(x) else x
     eq = charts.line_chart({"S&P 500": norm(s.get("equities", pd.Series(dtype=float))),
                             "Nasdaq": norm(s.get("nasdaq", pd.Series(dtype=float)))}, "Bolsa (base 100 hace 2 años)")
-    return f'<div class="kpis">{comps}</div><div class="grid2">{risk}{eq}</div>'
+    term = charts.line_chart({"VIX / VIX 3m": _last_years(vt["ratio"], 2)}, "Estructura temporal del VIX",
+                             note="> 1: estrés inmediato") if vt is not None and len(vt) else ""
+    return f'<div class="kpis">{comps}</div><div class="grid2">{risk}{eq}{term}</div>'
 
 
 def section_evidence(ctx: Context) -> str:
@@ -763,6 +840,114 @@ def section_track(ctx: Context) -> str:
             'El IPC se evalúa al publicarse; los análogos a los 6 meses y el modelo a los 3 meses (S&P 500 sin dividendos).</p></div>')
 
 
+def section_view(ctx: Context) -> str:
+    av = ctx.asset_view
+    if av is None or av.empty:
+        return ""
+    sig = lambda v: "" if v is None or pd.isna(v) else ('<span class="pos">▲</span>' if v > 0 else
+                                                           '<span class="neg">▼</span>' if v < 0 else "·")
+    tag = {"Sobreponderar": "ok", "Infraponderar": "no", "Neutral": ""}
+    rows = [[escape(r["asset"]), sig(r["trend"]), sig(r["momentum"]), sig(r["scenario"]), sig(r["quadrant"]),
+             _num(r["score"], "+.1f"), f'<span class="tag {tag[r["view"]]}">{r["view"]}</span>', f"{r['conviction']:.0%}"]
+            for _, r in av.iterrows()]
+    top, bottom = sector_picks(ctx)
+    picks = ""
+    if top:
+        n = lambda k: f"{escape(ctx.sectors.table.at[k, 'name'])} ({k})"
+        picks = (f"<p><b>Sectores preferidos:</b> {', '.join(n(k) for k in top)} · <b>Evitar:</b> "
+                 f"{', '.join(n(k) for k in bottom)}</p>")
+    return (f'<div class="card"><h3>Visión sistemática por activo</h3>'
+            f'{_table(["Activo", "Tendencia", "Momentum 3m", "Escenario", "Cuadrante", "Puntos", "Visión", "Convicción"], rows)}'
+            f'{picks}<p class="muted">Reglas fijas: ▲/▼ = señal a favor/en contra. Escenario y cuadrante según el manual '
+            f'estándar de cada escenario (escenario ×0.5 si es parcial). ≥ +2 sobreponderar, ≤ −2 infraponderar. '
+            f'Señal sistemática, no recomendación.</p></div>')
+
+
+def section_sectors(ctx: Context) -> str:
+    v = ctx.sectors
+    if v is None:
+        return _missing(ctx, "sectores S&P 500")
+    t = v.table
+    cards = [_kpi("Amplitud (sectores en tendencia)", f"{v.breadth:.0%}"),
+             _kpi("Cíclicos − defensivos (3m)", _num(v.rotation_3m, "+.1f", "%"))]
+    has_beta = "beta_y10" in t
+    head = ["Sector", "1m", "3m", "6m", "12m", "Tendencia", "Rank momentum"] + (
+        ["β 10 años (por 10 pb)", "β WTI (por 10%)", "β dólar (por 1%)", "β HY (por 10 pb)"] if has_beta else [])
+    rows = []
+    for k, r in t.sort_values("momentum_rank").iterrows():
+        row = [f"<b>{k}</b> {escape(r['name'])}", _num(r["r1m"], "+.1f", "%"), _num(r["r3m"], "+.1f", "%"),
+               _num(r["r6m"], "+.1f", "%"), _num(r["r12m"], "+.1f", "%"),
+               ('<span class="pos">▲</span>' if r["trend_up"] else '<span class="neg">▼</span>')
+               if r["trend_up"] is not None else "", f"{r['momentum_rank']:.0f}"]
+        if has_beta:
+            row += [_num(r["beta_y10"] * 10, "+.2f", "%"), _num(r["beta_oil"] * 10, "+.2f", "%"),
+                    _num(r["beta_dollar"], "+.2f", "%"), _num(r["beta_credit"] * 10, "+.2f", "%")]
+        rows.append(row)
+    out = (f'<div class="kpis">{"".join(cards)}</div><div class="card"><h3>Frente al S&P 500 (SPY)</h3>'
+           f'{_table(head, rows)}<p class="muted">Rentabilidad relativa al SPY. β: cuánto rinde el sector frente al '
+           f'SPY por cada movimiento del factor, medido en periodos de 20 días durante 5 años.</p></div>')
+    if len(v.scenarios):
+        names = {**{k: SCEN_ES[k].split(" /")[0] for k in ms.SCENARIOS}, "last_20d": "Últimos 20 días"}
+        srows = [[f"<b>{k}</b> {escape(t.at[k, 'name'])}"] + [_num(v.scenarios.at[k, c], "+.1f", "%") for c in v.scenarios]
+                 for k in v.scenarios.sort_values(v.scenarios.columns[0], ascending=False).index]
+        out += (f'<div class="card"><h3>Mapa de escenarios: rentabilidad esperada frente al SPY</h3>'
+                f'{_table(["Sector"] + [names.get(c, c) for c in v.scenarios.columns], srows)}'
+                f'<p class="muted">Si el escenario se da con un movimiento típico (1 desviación) de sus variables. '
+                f'"Últimos 20 días": con los movimientos reales del último mes.</p></div>')
+    p = v.prices
+    yr = p[p.index > p.index[-1] - pd.Timedelta(days=365)]
+    rel = lambda k: (yr[k] / yr[k].iloc[0]) / (yr["SPY"] / yr["SPY"].iloc[0]) * 100
+    top, bottom = sector_picks(ctx)
+    cyc = [c for c in sc.CYCLICAL if c in p]
+    dfn = [c for c in sc.DEFENSIVE if c in p]
+    p2 = p[p.index > p.index[-1] - pd.DateOffset(years=2)]
+    norm = lambda cols: (p2[cols] / p2[cols].iloc[0]).mean(axis=1)
+    out += '<div class="grid2">' + charts.line_chart({k: rel(k) for k in (top + bottom) if k in yr},
+                                                      "Fuerza relativa frente al SPY, 1 año (base 100)", note="preferidos y a evitar")
+    if cyc and dfn:
+        out += charts.line_chart({"Cíclicos / defensivos": norm(cyc) / norm(dfn) * 100}, "Rotación: cíclicos frente a defensivos (base 100)",
+                                 note="sube = apetito por riesgo")
+    out += "</div>"
+    if v.errors:
+        out += f'<p class="muted">Sin datos: {escape(", ".join(sorted(v.errors)))}</p>'
+    return out
+
+
+def section_metals(ctx: Context) -> str:
+    mv = ctx.metals
+    if mv is None:
+        return _missing(ctx, "metales")
+    t = mv.table
+    rows = [[escape(r["label"]), f"{r['price']:,.2f}", _num(r["r1m"], "+.1f", "%"), _num(r["r3m"], "+.1f", "%"),
+             _num(r["r1y"], "+.1f", "%"), _num(r["vs_high"], "+.1f", "%"),
+             _num(r["funding"], "+.0f", "%") if pd.notna(r["funding"]) else "", escape(r["source"])]
+            for _, r in t.iterrows()]
+    cards = []
+    g = mv.gold_vs_real
+    if g:
+        cards.append(_kpi("Oro vs tasa real", f"{g['gap_pct']:+.0f}% <span class='muted'>{g['gap_sd']:+.1f} sd</span>"))
+    if mv.gold_silver is not None:
+        r10 = mv.gold_silver[mv.gold_silver.index > mv.gold_silver.index[-1] - pd.DateOffset(years=10)]
+        cards.append(_kpi("Ratio oro/plata", f"{mv.gold_silver.iloc[-1]:.0f} <span class='muted'>p{(r10 <= r10.iloc[-1]).mean() * 100:.0f} 10a</span>"))
+    if mv.copper_gold is not None:
+        cards.append(_kpi("Cobre/oro vs bono 10a", _num(mv.copper_gold_vs_10y, "+.2f") + " <span class='muted'>corr. 3a</span>"))
+    one = lambda s: s[s.index > s.index[-1] - pd.Timedelta(days=365)]
+    base = lambda s: one(s) / one(s).iloc[0] * 100
+    prices = mv.data.prices
+    ch = charts.line_chart({LABELS_SHORT[k]: base(v) for k, v in prices.items()}, "Metales, 1 año (base 100)")
+    if mv.copper_gold is not None:
+        ch += charts.line_chart({"Cobre/oro ×1000": mv.copper_gold[mv.copper_gold.index > mv.copper_gold.index[-1] - pd.DateOffset(years=3)]},
+                                "Ratio cobre/oro (3 años)", note="sube = expectativas de crecimiento")
+    expl = ("<p class='muted'>Oro vs tasa real: distancia del oro a su relación de 3 años con el TIPS a 10 años "
+            "(> +1 sd: caro respecto a esa relación). Funding: posicionamiento apalancado en los perpetuos de Binance.</p>")
+    return (f'<div class="kpis">{"".join(cards)}</div><div class="card">'
+            f'{_table(["Metal", "Precio", "1m", "3m", "1 año", "vs máx. 1a", "Funding anual", "Fuente"], rows)}{expl}</div>'
+            f'<div class="grid2">{ch}</div>')
+
+
+LABELS_SHORT = {"gold": "Oro", "silver": "Plata", "copper": "Cobre"}
+
+
 def render(ctx: Context) -> str:
     gen = datetime.now().strftime("%d/%m/%Y %H:%M")
     bullets = "".join(f"<li>{b}</li>" for b in executive(ctx))
@@ -774,13 +959,15 @@ def render(ctx: Context) -> str:
         ("4. Régimen de riesgo", section_risk(ctx)),
         ("5. Evidencia sectorial", section_evidence(ctx) if ctx.regime_study or ctx.quadrant_study
          else '<p class="muted">Omitida (--quick).</p>'),
-        ("6. Análogos históricos y modelo predictivo", section_history(ctx) if "análogos y modelo" in ctx.errors or ctx.analogs
+        ("6. Sectores del S&P 500", section_sectors(ctx)),
+        ("7. Metales: oro, plata y cobre", section_metals(ctx)),
+        ("8. Análogos históricos y modelo predictivo", section_history(ctx) if "análogos y modelo" in ctx.errors or ctx.analogs
          else '<p class="muted">Omitida (--quick).</p>'),
-        ("7. Cripto", section_crypto(ctx)),
-        ("8. Liquidez de la Fed", section_liquidity(ctx)),
-        ("9. Carry del yen", section_carry(ctx)),
-        ("10. Historial de aciertos del motor", section_track(ctx)),
-        ("11. Salud de los datos", section_health(ctx)),
+        ("9. Cripto", section_crypto(ctx)),
+        ("10. Liquidez de la Fed", section_liquidity(ctx)),
+        ("11. Carry del yen", section_carry(ctx)),
+        ("12. Historial de aciertos del motor", section_track(ctx)),
+        ("13. Salud de los datos", section_health(ctx)),
     ]
     body = "".join(f"<h2>{escape(t)}</h2>{s}" for t, s in sections)
     return f"""<!doctype html>
@@ -790,6 +977,7 @@ def render(ctx: Context) -> str:
 <h1>Informe macro y de riesgo</h1>
 <p class="sub">Datos de FRED hasta {ctx.data_through or "n/d"} · generado {gen} · Macro Shock Risk Engine</p>
 {kpis(ctx)}
+{section_view(ctx)}
 <div class="card"><h3>Lectura ejecutiva</h3><ul class="exec">{bullets}</ul></div>
 {body}
 {f'<div class="card"><h3>Secciones con datos incompletos</h3><ul class="err">{errs}</ul></div>' if errs else ""}

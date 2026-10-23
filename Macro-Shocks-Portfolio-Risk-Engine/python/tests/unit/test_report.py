@@ -22,6 +22,7 @@ from macro_shock.research import analogs as an, charts, french
 
 from .test_cpi_nowcast import as_fred, synthetic
 from .test_crypto import FakeAPI, synthetic_prices
+from .test_sectors_metals import factors as sector_factors, fake_stooq, market_prices
 from .test_macro import SUPPLY_SHOCK, TODAY, FakeFred, french_by_quadrant, macro_series, market
 
 
@@ -110,6 +111,7 @@ def report_fred():
     data.update({"WALCL": pd.Series(7e6 + np.cumsum(rng.normal(0, 2e4, 330)), weeks),
                  "WTREGEN": pd.Series(800_000.0, weeks),          # FRED: millions "RRPONTSYD": pd.Series(150.0, days[-1600:]),
                  "DFF": pd.Series(3.9, days[-1600:])})
+    data["VXVCLS"] = data["VIXCLS"] * 1.1
     from .test_carry_track import series as carry_series
     cs = carry_series()
     data.update({"DEXJPUS": cs["usdjpy"], "IR3TIB01USM156N": cs["us3m"], "IR3TIB01JPM156N": cs["jp3m"]})
@@ -127,6 +129,8 @@ class TestReportCommand:
         from macro_shock.data import feed_provider
         from macro_shock.research import crypto
         monkeypatch.setattr(crypto, "http_json", FakeAPI(synthetic_prices()))
+        from macro_shock.research import stooq
+        monkeypatch.setattr(stooq, "http_text", fake_stooq(market_prices(sector_factors())))
         texts = french_by_quadrant(pd.bdate_range("1970-01-02", TODAY))
         monkeypatch.setattr(french, "download", lambda dataset, timeout=60.0: texts[dataset])
         fake = FakeFred(report_fred)
@@ -139,10 +143,12 @@ class TestReportCommand:
         html = out_file.read_text(encoding="utf-8")
         assert "Report written to" in out and "incomplete" not in out
         for part in ("Lectura ejecutiva", "1. Qué descuenta el mercado", "2. Crecimiento", "3. Energía e IPC",
-                     "4. Régimen de riesgo", "5. Evidencia sectorial", "6. Análogos históricos",
-                     "Meses más parecidos a hoy", "Modelo predictivo", "Shock de oferta", "7. Cripto", "ONDO",
-                     "Alertas cripto", "8. Liquidez de la Fed", "Liquidez neta", "9. Carry del yen", "subidas bruscas del yen",
-                     "10. Historial de aciertos", "previsiones registradas", "11. Salud de los datos", "al día"):
+                     "4. Régimen de riesgo", "5. Evidencia sectorial", "6. Sectores del S&amp;P 500", "Mapa de escenarios",
+                     "7. Metales", "Ratio oro/plata", "Visión sistemática por activo", "Sectores preferidos",
+                     "VIX / VIX 3 meses", "8. Análogos históricos",
+                     "Meses más parecidos a hoy", "Modelo predictivo", "Shock de oferta", "9. Cripto", "ONDO",
+                     "Alertas cripto", "10. Liquidez de la Fed", "Liquidez neta", "11. Carry del yen", "subidas bruscas del yen",
+                     "12. Historial de aciertos", "previsiones registradas", "13. Salud de los datos", "al día"):
             assert part in html, part
         assert html.count("<svg") >= 10
         assert "Secciones con datos incompletos" not in html
