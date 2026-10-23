@@ -79,6 +79,9 @@ class FakeAPI:
         if "coins/markets" in url:
             return [{"id": cid, "market_cap": 1e9 * (10 - i), "market_cap_rank": i + 1, "ath_change_percentage": -30.0}
                     for i, (cid, _) in enumerate(cr.COINS.values())]
+        if "publicreporting.cftc.gov" in url:
+            from .test_valuation_positioning import cftc_rows
+            return cftc_rows(0.0)
         if "/global" in url:
             return {"data": {"market_cap_percentage": {"btc": 58.2, "eth": 11.0}, "total_market_cap": {"usd": 3.1e12}}}
         raise AssertionError(f"unexpected url {url}")

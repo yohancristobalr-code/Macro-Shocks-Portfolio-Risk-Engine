@@ -39,21 +39,23 @@ Doble clic en **"Informe Macro"** del escritorio. En 1–3 minutos se abre en el
 
 | Sección | Qué responde |
 |---|---|
-| Visión sistemática | Sobreponderar / neutral / infraponderar por activo, y los sectores preferidos y a evitar |
+| Visión sistemática | Sobreponderar / neutral / infraponderar por activo, los sectores preferidos y a evitar, y el calendario de 14 días |
 | Lectura ejecutiva | Las conclusiones del día, generadas a partir de los números |
 | 1. Qué descuenta el mercado | Escenario confirmado o invalidado y qué vigilar |
 | 2. Crecimiento, inflación y cuadrante | Indicadores adelantados, pista del PMI y cuadrante macro |
 | 3. Energía e IPC | Nowcast del IPC por subpartida, su validación y gráficas de precios |
 | 4. Régimen de riesgo | Componentes de vulnerabilidad, VIX, crédito y bolsa |
-| 5. Evidencia sectorial | Sectores y estilos con evidencia `**`/`*` en el régimen y en el cuadrante, y su convergencia |
-| 6. Sectores del S&P 500 | Los 11 sectores frente al SPY, sus sensibilidades a la macro y el mapa de escenarios |
-| 7. Metales | Oro, plata y cobre; el oro frente a la tasa real; los ratios oro/plata y cobre/oro |
-| 8. Análogos y modelo | Los meses más parecidos desde 1990 y qué pasó después; modelo predictivo con su R² fuera de muestra |
-| 9. Cripto | 10 monedas, apalancamiento (funding), sentimiento, stablecoins y régimen cripto |
-| 10. Liquidez de la Fed | Liquidez neta, expectativas de tipos y su relación medida con el Nasdaq y BTC |
-| 11. Carry del yen | Riesgo de desmontaje del carry trade y qué pasó en episodios anteriores |
-| 12. Historial de aciertos | Cuánto acertaron las previsiones de informes anteriores |
-| 13. Salud de los datos | Qué series están al día y cuáles fallaron |
+| 5. Valoración de la bolsa | PER aproximado, indicador Buffett y prima de riesgo con su percentil histórico, y qué rindió la bolsa después |
+| 6. Posicionamiento (CFTC) | Cuán largos o cortos están los especuladores en S&P 500, bonos, yen, petróleo, oro, cobre y Bitcoin |
+| 7. Evidencia sectorial | Sectores y estilos con evidencia `**`/`*` en el régimen y en el cuadrante, y su convergencia |
+| 8. Sectores del S&P 500 | Los 11 sectores frente al SPY, sus sensibilidades a la macro y el mapa de escenarios |
+| 9. Metales | Oro, plata y cobre; el oro frente a la tasa real; los ratios oro/plata y cobre/oro |
+| 10. Análogos y modelo | Los meses más parecidos desde 1990 y qué pasó después; modelo predictivo con su R² fuera de muestra |
+| 11. Cripto | 10 monedas, apalancamiento (funding), sentimiento, stablecoins y régimen cripto |
+| 12. Liquidez de la Fed | Liquidez neta, expectativas de tipos y su relación medida con el Nasdaq y BTC |
+| 13. Carry del yen | Riesgo de desmontaje del carry trade y qué pasó en episodios anteriores |
+| 14. Historial de aciertos | Cuánto acertaron las previsiones de informes anteriores |
+| 15. Salud de los datos | Qué series están al día y cuáles fallaron |
 
 Cada informe se guarda en `reports\informe_AAAA-MM-DD.html`, así que tendrás un historial que puedes comparar.
 
@@ -105,11 +107,12 @@ Volver a ejecutar el instalador reinstala las librerías nuevas y repite los tes
 
 Por orden de valor. Cada paso es independiente y se puede construir con datos gratuitos:
 
-1. **Validar el primer motor con comunicados reales**: pasar por `analyze` los textos de las reuniones de la Fed desde 2017 y medir si el puntaje de riesgo anticipa los movimientos del bono a 2 años, la bolsa y el VIX.
-2. **Expectativas de la Fed antes de cada reunión**: usar el diferencial bono a 2 años − tipo de la Fed (`DGS2` − `DFF`) como referencia para medir la sorpresa frente al mercado.
-3. **Completar el clasificador de riesgo** con divisas y materias primas, para pasar de 5 a 7 de los 8 grupos de datos.
-4. **Caché local de datos**: informes más rápidos y que funcionen aunque FRED esté caído.
-5. **Europa**: IPC armonizado y tipos del BCE desde el portal de datos del BCE, que es gratuito.
-6. **Avisos automáticos**: enviar las alertas de `daily` por correo o Telegram, y programar el informe antes de la apertura.
+1. **Escenarios con probabilidades**, calibradas con el historial de aciertos cuando tenga unos meses de datos.
+2. **Validar el primer motor con comunicados reales**: pasar por `analyze` los textos de las reuniones de la Fed desde 2017 y medir si el puntaje de riesgo anticipa los movimientos del bono a 2 años, la bolsa y el VIX.
+3. **Sorpresa de cada reunión de la Fed frente al mercado**: las expectativas (2 años − fed funds) ya están en el informe; falta usarlas en `analyze` para medir la sorpresa del anuncio.
+4. **Completar el clasificador de riesgo** con divisas y materias primas, para pasar de 5 a 7 de los 8 grupos de datos.
+5. **Caché local de datos**: informes más rápidos y que funcionen aunque FRED esté caído.
+6. **Europa**: IPC armonizado y tipos del BCE desde el portal de datos del BCE, que es gratuito.
+7. **Avisos automáticos**: enviar las alertas de `daily` por correo o Telegram, y programar el informe antes de la apertura.
 
 Regla para cada mejora nueva: **tests con datos sintéticos de respuesta conocida, validación fuera de muestra y documentación en español**, como en todo lo construido hasta ahora.

@@ -65,6 +65,27 @@ Debe terminar con `passed` y sin `failed`.
 
 Todos se ejecutan con `python -m macro_shock <comando>`. Añade `--help` a cualquiera para ver sus opciones.
 
+**Referencia rápida** (versión 1.2; un comando por línea en PowerShell, desde la carpeta interior):
+
+```powershell
+python -m macro_shock report --open          # informe ejecutivo completo (o doble clic en "Informe Macro")
+python -m macro_shock report --quick --open  # sin sectores por régimen, análogos ni modelo
+python -m macro_shock daily                  # informe diario completo con alertas
+python -m macro_shock daily --quick          # versión rápida
+python -m macro_shock macro                  # escenario, crecimiento, inflación, cuadrante y sectores
+python -m macro_shock macro --quick          # sin sectores por cuadrante (antes del PMI)
+python -m macro_shock nowcast                # IPC estimado por subpartidas energéticas
+python -m macro_shock crypto                 # eje cripto y liquidez de la Fed
+python -m macro_shock sector-study           # sectores y estilos por régimen desde 1990
+python -m macro_shock optimize --max-drawdown 0.25   # pesos con tu límite de caída
+python -m macro_shock fomc-study             # bitcoin, bolsa y VIX ante la Fed
+python -m macro_shock analyze --title "FOMC" --institution "Federal Reserve" --event-time "2026-12-09T14:00:00-05:00" --data fred --text "TEXTO" --portfolio portfolio.csv --sectors --inflation
+python -m macro_shock demo --all             # escenarios de demostración, sin datos
+python -m pytest python/tests/unit -q        # comprobar que todo funciona
+```
+
+Instalación o actualización en cualquier PC: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1` ([INSTALACION_NUEVO_PC.md](INSTALACION_NUEVO_PC.md)). Contexto completo del proyecto: [PROYECTO.md](PROYECTO.md).
+
 | Comando | Qué responde | Frecuencia |
 |---|---|---|
 | `daily` | ¿Cómo está el mercado hoy? ¿Cambió algo? | Diaria |
@@ -310,7 +331,7 @@ Reúne todos los estudios en un solo archivo que se abre sin internet, con tema 
 python -m macro_shock crypto
 ```
 
-No necesita ninguna clave ni cuenta: usa APIs públicas (si tienes la clave de FRED, añade el Nasdaq, el cuadrante y la liquidez de la Fed). En el informe HTML es la sección 9.
+No necesita ninguna clave ni cuenta: usa APIs públicas (si tienes la clave de FRED, añade el Nasdaq, el cuadrante y la liquidez de la Fed). En el informe HTML es la sección «Cripto».
 
 **Las 10 monedas:** BTC, ETH, SOL, AAVE y ONDO (tu elección), más XRP, BNB, DOGE, ADA y LINK: las mayores no estables con más de 5 años de historia en Binance, que cubren pagos, exchange, plataformas, oráculos y memes. Las stablecoins (USDT, USDC) no entran en el análisis de precio, pero su oferta total se usa como indicador de liquidez. La lista está en `COINS`, en `python/src/macro_shock/research/crypto.py`.
 
@@ -326,9 +347,9 @@ No necesita ninguna clave ni cuenta: usa APIs públicas (si tienes la clave de F
 
 **Régimen cripto** (a partir de BTC): tendencia (por encima o por debajo de su media de 200 días) × volatilidad (la de 30 días frente a su mediana anual). La evidencia muestra qué monedas superaron a BTC en los 30 días siguientes en cada régimen, y cómo rindieron BTC y ETH en cada **cuadrante macro**, con las mismas marcas `**`/`*`. Las monedas jóvenes (ONDO desde 2024) tienen pocas ventanas y casi nunca alcanzan una marca: es lo correcto, no un fallo.
 
-**Liquidez de la Fed** (sección 10 del informe): balance de la Fed − cuenta del Tesoro − repos inversos, en billones de dólares, y expectativas de tipos (bono a 2 años − fed funds: positivo, el mercado espera subidas; negativo, bajadas). El informe **mide** la correlación de la liquidez con el Nasdaq y BTC en los últimos 6 años, en lugar de suponerla.
+**Liquidez de la Fed** (sección «Liquidez de la Fed» del informe): balance de la Fed − cuenta del Tesoro − repos inversos, en billones de dólares, y expectativas de tipos (bono a 2 años − fed funds: positivo, el mercado espera subidas; negativo, bajadas). El informe **mide** la correlación de la liquidez con el Nasdaq y BTC en los últimos 6 años, en lugar de suponerla.
 
-⚠️ Si Binance está restringido en tu país, los futuros (funding e interés abierto) pueden fallar: el resto sigue funcionando y la sección 13 lo indica.
+⚠️ Si Binance está restringido en tu país, los futuros (funding e interés abierto) pueden fallar: el resto sigue funcionando y la sección «Salud de los datos» lo indica.
 
 ### 5.10b Página 1: visión sistemática por activo
 
@@ -343,7 +364,7 @@ Arriba del informe, una tabla como la que abre los informes de los bancos: **sob
 
 ≥ +2: sobreponderar; ≤ −2: infraponderar. Para bonos y crédito, "a favor" significa que bajan su rentabilidad o su spread. Debajo aparecen los **3 sectores preferidos y los 3 a evitar**. Son reglas fijas y transparentes, no una recomendación.
 
-### 5.10c Sectores del S&P 500 y metales (secciones 6 y 7)
+### 5.10c Sectores del S&P 500 y metales
 
 **Sectores:** los 11 ETF SPDR frente al SPY, con precios diarios de **Stooq** (gratis, sin clave):
 - Rentabilidad relativa a 1, 3, 6 y 12 meses; tendencia; ranking de momentum.
@@ -356,9 +377,9 @@ Arriba del informe, una tabla como la que abre los informes de los bancos: **sob
 - **Ratio oro/plata** con su percentil de 10 años. Alto: miedo.
 - **Cobre/oro**: el indicador de crecimiento que siguen los bancos, con su correlación con el bono a 10 años.
 
-**Estructura del VIX** (sección 4): VIX frente al VIX a 3 meses (`VXVCLS`). Por encima de 1, el mercado descuenta estrés inmediato. `daily` lo avisa.
+**Estructura del VIX** (sección «Régimen de riesgo»): VIX frente al VIX a 3 meses (`VXVCLS`). Por encima de 1, el mercado descuenta estrés inmediato. `daily` lo avisa.
 
-### 5.11 Carry trade del yen (sección 11 del informe)
+### 5.11 Carry trade del yen
 
 Muchos inversores se endeudan en yenes (tipos casi nulos) para invertir en activos que rinden más. Si el yen sube con fuerza, tienen que recomprarlo para devolver el préstamo y venden lo que compraron: en agosto de 2024 ese desmontaje hundió el Nasdaq y bitcoin en pocos días.
 
@@ -371,11 +392,27 @@ Muchos inversores se endeudan en yenes (tipos casi nulos) para invertir en activ
 
 El informe **mide** qué hicieron el Nasdaq y BTC en los 30 días siguientes a cada episodio desde 2000, frente a cualquier periodo de 30 días.
 
-### 5.12 Historial de aciertos (sección 12 del informe)
+### 5.12 Historial de aciertos
 
 Cada `report` guarda sus previsiones en `reports\predicciones.csv`: el nowcast del IPC con su rango, la mediana de los análogos a 6 meses y la previsión del modelo a 3 meses. Los informes siguientes evalúan las que ya tienen resultado: el error medio, el porcentaje de IPC dentro del rango del 90% y el porcentaje de signos acertados. **Tras unos meses sabrás, con datos propios, cuánto fiarte de cada pieza.** Si generas varios informes el mismo día, solo cuenta el último.
 
-### 5.13 Salud de los datos (sección 13 del informe)
+### 5.13 Valoración, posicionamiento y calendario
+
+**Valoración de la bolsa** (solo FRED, sin datos de pago):
+
+| Indicador | Cálculo | Cómo leerlo |
+|---|---|---|
+| PER aproximado | Valor de mercado de las acciones de EE. UU. (cuentas Z.1 de la Fed) / beneficios empresariales (BEA) | Su **percentil desde 1951**. El nivel no coincide con el PER del S&P 500 publicado; lo útil es la comparación histórica |
+| Indicador Buffett | Valor de mercado / PIB | Igual: el percentil |
+| Prima de riesgo | Rentabilidad de los beneficios − tasa real a 10 años | Baja: la bolsa paga poco frente a bonos sin riesgo (cara). Desde 2003 |
+
+El dato trimestral se lleva a hoy con el S&P 500. El informe mide además **qué rentabilidad anual dio la bolsa los 5 años siguientes** cuando la valoración estaba en el mismo quinto de su historia que hoy. En la página 1, una prima de riesgo en su 20% más bajo resta un punto a la bolsa y en su 20% más alto lo suma.
+
+**Posicionamiento (CFTC):** el informe semanal de compromisos de operadores (API pública, sin clave) para S&P 500, bono a 10 años, yen, petróleo, oro, cobre y Bitcoin. El **índice COT** sitúa la posición neta de los especuladores en su rango de 3 años: 100 es la más larga y 0 la más corta. **≥ 90 o ≤ 10 es un extremo**, que suele ser señal contraria: cuando todos están largos, quedan pocos compradores. En la página 1 resta un punto si el extremo es largo y lo suma si es corto.
+
+**Calendario:** debajo de la página 1, las publicaciones clave de los próximos 14 días (IPC, empleo, PIB, PCE, PPI, ventas minoristas…, del calendario de FRED) y las reuniones de la Fed. El PMI de S&P Global no está en FRED: se publica hacia el día 20–23 de cada mes.
+
+### 5.14 Salud de los datos
 
 Revisa cada serie que usó el informe: último dato, días de antigüedad, frecuencia y estado (**al día**, **desactualizada** o **falló**). Los problemas aparecen arriba de la tabla. Si una serie falla varios días seguidos, probablemente la fuente cambió su identificador: es lo primero que hay que corregir.
 

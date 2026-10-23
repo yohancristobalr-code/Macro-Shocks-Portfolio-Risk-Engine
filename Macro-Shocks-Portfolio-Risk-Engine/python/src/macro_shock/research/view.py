@@ -53,7 +53,9 @@ def price_signals(s: Optional[pd.Series], invert: bool = False) -> Dict[str, Opt
 
 
 def asset_view(series: Dict[str, Optional[pd.Series]], scenario: Optional[str], scenario_status: Optional[str],
-               quadrant: Optional[str]) -> pd.DataFrame:
+               quadrant: Optional[str], extra: Optional[Dict[str, Dict[str, int]]] = None) -> pd.DataFrame:
+    """``extra``: more signals per asset, e.g. {"valuation": {"equities": -1}, "positioning": {"gold": -1}}."""
+    extra = extra or {}
     weight = {"CONFIRMED": 1.0, "partial": 0.5}.get(scenario_status or "", 0.0)
     rows = []
     for key, label in ASSETS.items():
@@ -61,14 +63,16 @@ def asset_view(series: Dict[str, Optional[pd.Series]], scenario: Optional[str], 
         sig = price_signals(s, invert=key in ("bonds", "credit"))
         scen = PLAYBOOK[scenario][key] * weight if scenario in PLAYBOOK and weight else None
         quad = PLAYBOOK[quadrant][key] if quadrant in PLAYBOOK else None
-        parts = [v for v in (sig["trend"], sig["momentum"], scen, quad) if v is not None]
+        more = {name: sigs[key] for name, sigs in extra.items() if sigs.get(key)}
+        parts = [v for v in (sig["trend"], sig["momentum"], scen, quad, *more.values()) if v is not None]
         if not parts:
             continue
         total = float(sum(parts))
         maximum = float(len(parts) - (0 if scen is None else 1 - weight))
         view = "Sobreponderar" if total >= OVER else "Infraponderar" if total <= UNDER else "Neutral"
         rows.append({"key": key, "asset": label, "trend": sig["trend"], "momentum": sig["momentum"],
-                     "scenario": scen, "quadrant": quad, "score": total, "view": view,
+                     "scenario": scen, "quadrant": quad, "valuation": more.get("valuation"),
+                     "positioning": more.get("positioning"), "score": total, "view": view,
                      "conviction": abs(total) / maximum if maximum else 0.0})
     return pd.DataFrame(rows)
 
