@@ -19,6 +19,8 @@ Esta guía explica cómo instalar, configurar y usar el motor desde Windows (Pow
 
 ## 2. Instalación (una sola vez)
 
+**En un PC nuevo**, lo más sencillo es el instalador automático: consulta [INSTALACION_NUEVO_PC.md](INSTALACION_NUEVO_PC.md). Instalación manual:
+
 En PowerShell, **un comando por línea**:
 
 ```powershell
@@ -71,6 +73,7 @@ Todos se ejecutan con `python -m macro_shock <comando>`. Añade `--help` a cualq
 | `optimize` | ¿Qué pesos dan el máximo de acciones dentro de mi tolerancia a caídas? | Mensual |
 | `fomc-study` | ¿Cómo reaccionaron bitcoin, la bolsa y el VIX a la Fed? | Ocasional |
 | `nowcast` | ¿Cuánto subirá el próximo IPC por la energía? | Antes de cada IPC |
+| `report` | **Todo lo anterior en un informe HTML ejecutivo**, con gráficas, análogos históricos y modelo predictivo | Antes de operar |
 | `macro` | ¿Qué escenario macro descuenta el mercado? ¿Qué dicen los datos de crecimiento e inflación? ¿Qué sectores funcionan en ese cuadrante? | Semanal |
 
 ### 5.1 `daily` — informe diario
@@ -284,6 +287,21 @@ Responde las preguntas de un informe de riesgo multiactivo con datos de FRED, en
 - El bloque 1 describe **lo que el mercado ya descuenta**, no lo que va a pasar.
 - **El oro y la plata no están**: FRED dejó de publicar sus precios en 2022.
 - El PMI de S&P Global y el ISM no son públicos: las encuestas regionales solo indican su dirección.
+
+### 5.9 `report` — informe ejecutivo en HTML
+
+```powershell
+python -m macro_shock report --open      # genera reports\informe_AAAA-MM-DD.html y lo abre
+python -m macro_shock report --quick     # sin sectores, análogos ni modelo (más rápido)
+```
+
+Reúne todos los estudios en un solo archivo que se abre sin internet, con tema claro u oscuro según tu sistema. Después de `install.ps1`, el acceso directo **"Informe Macro"** del escritorio hace lo mismo con un doble clic.
+
+- **Lectura ejecutiva**: frases generadas a partir de los números, sin opiniones: régimen, escenario de mercado, tasas, cuadrante, inflación, crecimiento, energía, análogos, modelo y convergencia sectorial.
+- **Gráficas de tendencia**: tasas (nominal, real y breakeven), puntaje de los escenarios en el último año, ejes macro en 15 años, IPC interanual, peticiones de subsidio, crudo, surtidor, margen de refino, gas, VIX, crédito y bolsa.
+- **Análogos históricos**: los 5 meses desde 1990 más parecidos a hoy (VIX, curva, spread Baa, cambio del 10 años y del WTI en 12 meses, ejes de crecimiento e inflación), separados al menos un año entre sí, con lo que hicieron después la bolsa (3, 6 y 12 meses y caída máxima), el 10 años, el petróleo y los sectores, frente a la media de todos los meses.
+- **Modelo predictivo**: regresión *ridge* del exceso de rentabilidad de la bolsa a 3 meses sobre esas mismas variables, **reestimada cada mes desde 2005 solo con datos anteriores**. Si el **R² fuera de muestra** es ≤ 0, el informe lo dice y la previsión **no debe usarse**: la media histórica predice igual o mejor.
+- Si una fuente de datos falla, el informe se genera igual e indica qué sección falta y por qué.
 
 ---
 

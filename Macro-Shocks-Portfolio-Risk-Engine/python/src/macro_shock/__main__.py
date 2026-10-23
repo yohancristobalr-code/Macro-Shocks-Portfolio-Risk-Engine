@@ -558,6 +558,34 @@ def cmd_macro(args: argparse.Namespace) -> None:
 
 
 # ──────────────────────────────────────────────────────────────
+# Command: report
+# ──────────────────────────────────────────────────────────────
+
+def cmd_report(args: argparse.Namespace) -> None:
+    """Executive HTML report: every study in one file, with charts, analogs and a tested model."""
+    from datetime import date
+
+    from macro_shock.data.feed_provider import DataFeedError, fred_client
+    from macro_shock.research import report
+
+    try:
+        fred = fred_client()
+    except DataFeedError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    print("Collecting data (FRED, French Data Library)... this takes 1-3 minutes.")
+    ctx = report.gather(fred, quick=args.quick)
+    path = Path(args.output) if args.output else _PROJECT_ROOT / "reports" / f"informe_{date.today().isoformat()}.html"
+    report.write(ctx, path)
+    for name, err in ctx.errors.items():
+        print(f"  section '{name}' incomplete: {err}")
+    print(f"Report written to: {path}")
+    if args.open:
+        import webbrowser
+        webbrowser.open(path.resolve().as_uri())
+
+
+# ──────────────────────────────────────────────────────────────
 # Command: optimize
 # ──────────────────────────────────────────────────────────────
 
@@ -984,6 +1012,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Skip the sectors-by-quadrant study (no French Data Library download)")
     p_mac.add_argument("--start", default="1972-01-01", help="First date of the sectors-by-quadrant study")
     p_mac.set_defaults(func=cmd_macro)
+
+    p_rep = sub.add_parser("report", help="Executive HTML report with charts, analogs and a tested model "
+                                          "(needs FRED_API_KEY)")
+    p_rep.add_argument("--quick", action="store_true",
+                       help="Skip sectors, analogs and the model (no French Data Library download)")
+    p_rep.add_argument("--output", default=None, help="HTML file (default: reports/informe_<date>.html)")
+    p_rep.add_argument("--open", action="store_true", help="Open the report in the browser when done")
+    p_rep.set_defaults(func=cmd_report)
 
     p_now = sub.add_parser("nowcast", help="Next US CPI from energy prices and CPI sub-items (needs FRED_API_KEY)")
     p_now.add_argument("--output", default=None, help="Write the month-by-month backtest to a CSV file")

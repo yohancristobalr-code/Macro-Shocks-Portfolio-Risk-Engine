@@ -12,6 +12,7 @@ cd $HOME\Macro-Shocks-Portfolio-Risk-Engine\Macro-Shocks-Portfolio-Risk-Engine
 
 | Cuándo | Comando | Tiempo | Para qué |
 |---|---|---|---|
+| **Antes de operar** | `report --open` o doble clic en "Informe Macro" | 1–3 min | Todo en un informe ejecutivo con gráficas |
 | **Cada día de mercado** | `daily --quick` | 1 min | Régimen y alertas |
 | **Días de evento** (Fed, BCE…) | `analyze ... --portfolio portfolio.csv --sectors --inflation` | 5 min | Riesgo del anuncio para tu cartera |
 | **Antes de cada IPC** (≈ día 10–15) | `nowcast` | 1 min | Qué inflación esperar y qué la empuja |

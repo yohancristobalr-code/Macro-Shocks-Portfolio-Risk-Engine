@@ -1,0 +1,595 @@
+"""
+research/report.py
+
+Executive HTML report for the pre-trading routine: every study of the engine
+in one self-contained file (no internet needed to open it, light and dark
+themes), with trend charts, an objective summary built from the numbers,
+historical analogs and an out-of-sample-tested predictive model.
+
+Each section is gathered independently: if one data source fails, the
+report still renders and says which section is missing and why.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from html import escape
+from typing import Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+import structlog
+
+from macro_shock.research import analogs as an
+from macro_shock.research import charts, cpi_nowcast, growth, macro, macro_scenario as ms, sector_study
+from macro_shock.research import french
+
+logger = structlog.get_logger(__name__)
+
+SCEN_ES = {"reacceleration": "Reaceleración con presión de costos", "disinflation": "Desinflación / aterrizaje ordenado",
+           "supply_shock": "Shock de oferta / inflación persistente", "growth_scare": "Freno de crecimiento / liquidación"}
+STATUS_ES = {"CONFIRMED": "confirmado", "partial": "parcial", "invalidated": "invalidado", "no signal": "sin señal"}
+REGIME_ES = {"risk_on_expansion": "Expansión con apetito por riesgo", "fragile_risk_on": "Apetito por riesgo frágil",
+             "risk_off_correction": "Corrección / aversión al riesgo", "crisis": "Crisis"}
+QUAD_ES = {"reacceleration": "Reaceleración (crecimiento ↑, inflación ↑)",
+           "disinflation": "Desinflación (crecimiento ↑, inflación ↓)",
+           "supply_shock": "Estanflación / shock de oferta (crecimiento ↓, inflación ↑)",
+           "growth_scare": "Desaceleración (crecimiento ↓, inflación ↓)"}
+COMPONENT_ES = {"volatility": "volatilidad", "credit": "crédito", "curve": "curva", "liquidity": "liquidez",
+                "funding": "financiación"}
+LEADING_ES = {"wei": "Índice económico semanal (Fed NY, % PIB)", "gdpnow": "GDPNow (Fed Atlanta, % PIB)",
+              "sahm": "Regla de Sahm (≥ 0.5 = recesión)", "philly_activity": "Fed Filadelfia: actividad",
+              "philly_orders": "Fed Filadelfia: nuevos pedidos", "philly_prices": "Fed Filadelfia: precios pagados",
+              "empire_activity": "Fed Nueva York: actividad", "empire_orders": "Fed Nueva York: nuevos pedidos",
+              "empire_prices": "Fed Nueva York: precios pagados"}
+SIGNAL_ES = {"claims": "Peticiones de subsidio", "indpro": "Producción industrial", "payrolls": "Empleo (nóminas)",
+             "cpi": "IPC general", "core": "IPC subyacente"}
+MOVE_ES = {"y2": "Bono 2 años", "y10": "Bono 10 años", "real10": "Tasa real 10 años (TIPS)",
+           "breakeven10": "Breakeven 10 años", "dollar": "Dólar (índice amplio)", "oil": "WTI", "equities": "S&P 500",
+           "nasdaq": "Nasdaq", "credit": "Spread HY", "vix": "VIX", "curve": "Curva 2s10s"}
+
+
+@dataclass
+class Context:
+    today: date
+    errors: Dict[str, str] = field(default_factory=dict)
+    data_through: Optional[date] = None
+    regime: Optional[str] = None
+    vulnerability: Optional[float] = None
+    components: Dict[str, float] = field(default_factory=dict)
+    snap: object = None
+    market_series: Dict[str, pd.Series] = field(default_factory=dict)
+    market: Optional[ms.MarketScenario] = None
+    score_hist: Optional[pd.DataFrame] = None
+    growth_series: Dict[str, pd.Series] = field(default_factory=dict)
+    sig: Optional[growth.Signals] = None
+    axes: Optional[growth.Axes] = None
+    axes_hist: Optional[pd.DataFrame] = None
+    leading: Optional[growth.Leading] = None
+    nowcast: Optional[cpi_nowcast.CpiNowcast] = None
+    nowcast_axis: Optional[float] = None
+    btc: Optional[float] = None
+    regime_study: Optional[sector_study.SectorStudy] = None
+    quadrant_study: Optional[sector_study.SectorStudy] = None
+    analogs: Optional[an.Analogs] = None
+    model: Optional[an.Model] = None
+
+
+def _try(ctx: Context, name: str, fn):
+    try:
+        return fn()
+    except Exception as e:                          # each section is optional
+        logger.warning("report_section_unavailable", section=name, error=str(e))
+        ctx.errors[name] = str(e)
+        return None
+
+
+def gather(fred, today: Optional[date] = None, quick: bool = False) -> Context:
+    from macro_shock.data.feed_provider import FREDFeedProvider
+    from macro_shock.event_detection.calendar import MarketCalendar
+    from macro_shock.market_context.vulnerability_scorer import MarketVulnerabilityScorer
+
+    ctx = Context(today or date.today())
+
+    def risk():
+        snap = FREDFeedProvider(MarketCalendar()).get_snapshot()
+        v = MarketVulnerabilityScorer().score(snap, log=False)
+        found = re.search(r"through (\d{4}-\d{2}-\d{2})", snap.gap_description or "")
+        ctx.data_through = date.fromisoformat(found.group(1)) if found else ctx.today
+        ctx.snap, ctx.regime, ctx.vulnerability = snap, v.regime.value, v.composite
+        comps = {"volatility": v.volatility_vulnerability, "credit": v.credit_vulnerability,
+                 "curve": v.yield_curve_vulnerability, "liquidity": v.liquidity_vulnerability,
+                 "funding": v.funding_vulnerability}
+        named = {"curve": "yield_curve"}
+        ctx.components = {k: x for k, x in comps.items() if named.get(k, k) not in v.missing_components}
+    _try(ctx, "riesgo", risk)
+
+    def market():
+        ctx.market_series = ms.fetch(fred, ctx.today)
+        ctx.market = ms.assess(ctx.market_series)
+        ctx.score_hist = ms.score_history(ctx.market_series)
+    _try(ctx, "mercado", market)
+
+    def macro_data():
+        ctx.growth_series = growth.fetch(fred, growth.FULL_HISTORY_START, ctx.today)
+        ctx.sig = growth.signals(ctx.growth_series)
+        ctx.axes = growth.axes_at(ctx.sig, ctx.today, lagged=False)
+        ctx.leading = growth.leading(ctx.growth_series)
+        ends = pd.date_range(pd.Timestamp(ctx.today) - pd.DateOffset(years=15), ctx.today, freq="MS") - pd.Timedelta(days=1)
+        rows = [growth.axes_at(ctx.sig, d, lagged=True) for d in ends]
+        ctx.axes_hist = pd.DataFrame({"Crecimiento": [a.growth for a in rows],
+                                      "Inflación": [a.inflation for a in rows]}, index=ends).astype(float)
+    _try(ctx, "macro", macro_data)
+
+    def nowcast():
+        ctx.nowcast = cpi_nowcast.run(fred, ctx.today)
+        if ctx.sig is not None:
+            ctx.nowcast_axis, _ = macro.nowcast_axis(ctx.growth_series, ctx.sig, ctx.nowcast)
+    _try(ctx, "ipc", nowcast)
+
+    def bitcoin():
+        s = pd.Series(fred.get_series("CBBTCUSD", observation_start=str(ctx.today - timedelta(days=14)),
+                                      observation_end=str(ctx.today))).dropna()
+        ctx.btc = float(s.iloc[-1]) if len(s) else None
+    _try(ctx, "bitcoin", bitcoin)
+
+    if quick:
+        return ctx
+    ctx.regime_study = _try(ctx, "sectores por régimen", lambda: sector_study.run(fred, date(1990, 1, 1)))
+    if ctx.sig is not None:
+        ctx.quadrant_study = _try(ctx, "sectores por cuadrante",
+                                  lambda: macro.quadrant_study(ctx.sig, ctx.axes.quadrant if ctx.axes else None))
+
+        def history():
+            mkt = an.fetch(fred, ctx.today)
+            df = an.panel(mkt, ctx.sig)
+            today_state = an.today_state(mkt, ctx.axes)
+            ctx.analogs = an.analogs(df, today_state, mkt)
+            ctx.model = an.model(df, today_state)
+        _try(ctx, "análogos y modelo", history)
+    return ctx
+
+
+# ── Objective summary ────────────────────────────────────────────────────────
+
+def _pct(v, spec="+.1f", unit="%"):
+    return "n/d" if v is None or pd.isna(v) else f"{format(v, spec)}{unit}"
+
+
+def energy_alerts_es(prices: Dict[str, pd.Series]) -> List[str]:
+    out = []
+    for key, limit in cpi_nowcast.ALERT_PRICES.items():
+        m = cpi_nowcast.move(prices.get(key, pd.Series(dtype=float)), 30)
+        if m and abs(m[2]) >= limit:
+            effect = "presión sobre el IPC energético" if m[2] > 0 else "alivio para el IPC energético"
+            out.append(f"{cpi_nowcast.PRICES[key][1]} {m[2]:+.1f}% en 30 días ({m[0]:.2f} → {m[1]:.2f}): {effect}")
+    return out
+
+
+def pmi_hints_es(lead: Optional[growth.Leading]) -> List[str]:
+    if lead is None:
+        return []
+    out = []
+    if lead.survey_activity_change is not None:
+        out.append(f"Pista del PMI: la actividad manufacturera regional "
+                   f"{'mejora' if lead.survey_activity_change > 0 else 'empeora'} ({lead.survey_activity_change:+.1f} pts; "
+                   f"{'en expansión' if (lead.survey_activity or 0) > 0 else 'en contracción'} en promedio).")
+    if lead.survey_prices_change is not None:
+        out.append(f"Pista de precios del PMI: los precios pagados "
+                   f"{'suben' if lead.survey_prices_change > 0 else 'bajan'} ({lead.survey_prices_change:+.1f} pts).")
+    if out:
+        out.append("Solo dirección: los índices de S&P Global e ISM no son públicos.")
+    return out
+
+
+def evidence_rows(study: Optional[sector_study.SectorStudy], label: Optional[str]) -> pd.DataFrame:
+    if study is None or label is None:
+        return pd.DataFrame()
+    rows = []
+    for table, kind in ((study.sectors, "sector"), (study.styles, "estilo")):
+        t = table[(table["regime"] == label) & table["evidence"].isin(["robust", "consistent"])]
+        for _, r in t.iterrows():
+            name = sector_study.sector_label(r["asset"]) if kind == "sector" else french.STYLES.get(r["asset"], r["asset"])
+            rows.append({"name": name, "kind": kind, "mean": r["mean_pct"], "hit": r["hit_rate"],
+                         "lo": r["ci_low"], "hi": r["ci_high"], "h1": r.get("mean_pct_h1"), "h2": r.get("mean_pct_h2"),
+                         "mark": sector_study.MARKERS[r["evidence"]], "n": r["n"]})
+    return pd.DataFrame(rows).sort_values("mean", ascending=False) if rows else pd.DataFrame()
+
+
+def convergence(ctx: Context) -> List[str]:
+    a = evidence_rows(ctx.regime_study, ctx.regime)
+    b = evidence_rows(ctx.quadrant_study, ctx.axes.quadrant if ctx.axes else None)
+    if a.empty or b.empty:
+        return []
+    out = []
+    for _, r in a.iterrows():
+        m = b[b["name"] == r["name"]]
+        if m.empty:
+            continue
+        same = np.sign(r["mean"]) == np.sign(m.iloc[0]["mean"])
+        side = "favorecido" if r["mean"] > 0 else "rezagado"
+        out.append(f"{r['name']}: {side} en el régimen y en el cuadrante (convergencia)" if same else
+                   f"{r['name']}: señales opuestas entre régimen y cuadrante (no actuar)")
+    return out
+
+
+def executive(ctx: Context) -> List[str]:
+    out = []
+    if ctx.regime:
+        top = max(ctx.components.items(), key=lambda kv: kv[1]) if ctx.components else None
+        out.append(f"<b>Riesgo:</b> régimen <b>{REGIME_ES.get(ctx.regime, ctx.regime)}</b> con vulnerabilidad "
+                   f"{ctx.vulnerability:.2f} (0 calma, 1 estrés)"
+                   + (f"; el componente más tenso es {COMPONENT_ES.get(top[0], top[0])} ({top[1]:.2f})." if top else "."))
+    m = ctx.market
+    if m is not None and m.best is not None:
+        match, against = m.conditions(m.best)
+        out.append(f"<b>Mercado:</b> el escenario que mejor encaja es <b>{SCEN_ES[m.best]}</b> "
+                   f"(puntaje {m.scores[m.best]:+.2f}, {STATUS_ES[m.status(m.best)]}). "
+                   f"Lo confirman {len(match)} de {len(match) + len(against)} movimientos.")
+        d = m.decomposition
+        if d:
+            driver = "la tasa real" if abs(d["real10"]) >= abs(d["breakeven10"]) else "la inflación esperada"
+            out.append(f"<b>Tasas:</b> el 10 años se movió {d['y10']:+.0f} pb en {m.window} días, sobre todo por "
+                       f"{driver} (real {d['real10']:+.0f} pb, breakeven {d['breakeven10']:+.0f} pb).")
+    if ctx.axes is not None and ctx.axes.quadrant:
+        agree = ""
+        if m is not None and m.best is not None and m.status(m.best) in ("CONFIRMED", "partial"):
+            agree = (" Coincide con lo que descuenta el mercado: lectura más sólida." if m.best == ctx.axes.quadrant else
+                     f" <b>No coincide</b> con el mercado ({SCEN_ES[m.best]}): o los datos están por girar o el mercado exagera.")
+        out.append(f"<b>Datos macro:</b> cuadrante <b>{QUAD_ES[ctx.axes.quadrant]}</b> "
+                   f"(crecimiento {ctx.axes.growth:+.2f}, inflación {ctx.axes.inflation:+.2f}).{agree}")
+    nc = ctx.nowcast
+    if nc is not None and nc.months:
+        mo = nc.months[0]
+        t = nc.table[nc.table["month"] == mo].set_index("item")
+        head = t.loc["headline"]
+        items = t[t["kind"] == "nowcast"].drop(index=["energy", "headline"], errors="ignore")
+        driver = items["contribution"].abs().idxmax() if len(items) else None
+        ann = cpi_nowcast.annualized(head["mm"])
+        out.append(f"<b>Inflación:</b> IPC estimado de {mo.strftime('%m/%Y')} {head['mm']:+.2f}% m/m "
+                   f"(rango {head['low']:+.2f} a {head['high']:+.2f}; {ann:+.1f}% anualizado frente al 2% de la Fed)"
+                   + (f"; la subpartida energética que más aporta es {t.loc[driver, 'label'].lower()} "
+                      f"({t.loc[driver, 'contribution']:+.2f} pts)." if driver else "."))
+    lead = ctx.leading
+    if lead is not None:
+        bits = []
+        if lead.sahm is not None:
+            bits.append(f"regla de Sahm {lead.sahm:.2f} ({'señal de recesión' if lead.sahm >= growth.SAHM_RECESSION else 'sin señal de recesión'})")
+        if lead.survey_activity_change is not None:
+            bits.append(f"encuestas manufactureras regionales {'mejoran' if lead.survey_activity_change > 0 else 'empeoran'} "
+                        f"({lead.survey_activity_change:+.1f} pts)")
+        if lead.survey_prices_change is not None:
+            bits.append(f"precios pagados {'al alza' if lead.survey_prices_change > 0 else 'a la baja'}")
+        if bits:
+            out.append("<b>Crecimiento adelantado:</b> " + "; ".join(bits) + ".")
+    if nc is not None:
+        alerts = energy_alerts_es(nc.prices)
+        wti = nc.prices.get("wti", pd.Series(dtype=float))
+        yr = cpi_nowcast.move(wti, 365)
+        out.append(f"<b>Energía:</b> WTI {wti.iloc[-1]:.2f} $/bbl" + (f" ({yr[2]:+.0f}% en un año)" if yr else "")
+                   + (". Alertas: " + "; ".join(alerts) if alerts else "; sin movimientos bruscos en 30 días."))
+    a = ctx.analogs
+    if a is not None and len(a.table):
+        med6 = a.table["mkt_6m"].median()
+        out.append(f"<b>Análogos históricos:</b> los {len(a.table)} meses más parecidos son "
+                   f"{', '.join(a.table['month'])}. Seis meses después, la bolsa rindió en mediana {_pct(med6)} "
+                   f"(media de todos los meses: {_pct(a.baseline.get('mkt_6m'))}); caída máxima media "
+                   f"{_pct(a.table['dd_6m'].mean())}.")
+    mdl = ctx.model
+    if mdl is not None:
+        if mdl.useful:
+            out.append(f"<b>Modelo predictivo:</b> R² fuera de muestra {mdl.oos_r2:+.3f} (modesto, pero mejor que la media). "
+                       f"Estima {mdl.forecast:+.1f}% de exceso de rentabilidad de la bolsa a 3 meses (media histórica "
+                       f"{mdl.baseline:+.1f}%; error típico ±{mdl.error_band:.1f}%).")
+        else:
+            out.append(f"<b>Modelo predictivo:</b> R² fuera de muestra {mdl.oos_r2:+.3f}: <b>no supera a la media "
+                       f"histórica, así que su previsión ({mdl.forecast:+.1f}% a 3 meses) no debe usarse</b>.")
+    for line in convergence(ctx):
+        out.append(f"<b>Sectores:</b> {escape(line)}.")
+    return out
+
+
+def watch_list(ctx: Context) -> List[str]:
+    m = ctx.market
+    if m is None or m.best is None:
+        return []
+    out = []
+    for var, sign in ms.SCENARIOS[m.best][1].items():
+        if var not in m.moves.index or pd.isna(m.moves.at[var, "z"]):
+            continue
+        z = float(m.moves.at[var, "z"])
+        need = "subiendo" if sign > 0 else "bajando"
+        state = "✔" if sign * z > 0 else "✘"
+        out.append(f"{state} {MOVE_ES.get(var, var)}: el escenario necesita que siga {need} (hoy {z:+.1f} sd)")
+    if len(m.scores) > 1:
+        alt = m.scores.index[1]
+        out.append(f"Alternativa más cercana: {SCEN_ES[alt]} (puntaje {m.scores[alt]:+.2f}).")
+    return out
+
+
+# ── HTML ─────────────────────────────────────────────────────────────────────
+
+CSS = """
+:root{--bg:#f7f7f5;--card:#fff;--ink:#1c1c1e;--muted:#6b6b70;--line:#e3e3e0;--accent:#2563eb;--good:#059669;--bad:#dc2626;--band:rgba(220,38,38,.07)}
+@media (prefers-color-scheme:dark){:root{--bg:#121214;--card:#1c1c1f;--ink:#ececee;--muted:#9a9aa1;--line:#2e2e33;--accent:#60a5fa;--good:#34d399;--bad:#f87171;--band:rgba(248,113,113,.10)}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:24px 16px 64px}h1{font-size:24px;margin:0 0 4px}h2{font-size:18px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:15px;margin:18px 0 8px}.muted{color:var(--muted)}.sub{color:var(--muted);margin:0 0 20px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:16px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}.kpi .l{font-size:12px;color:var(--muted)}.kpi .v{font-size:18px;font-weight:600;margin-top:2px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0}
+ul.exec{margin:0;padding-left:18px}ul.exec li{margin:6px 0}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:12px}
+figure.chart{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:0;padding:10px 10px 4px}figure.chart figcaption{font-weight:600;font-size:14px;margin:0 4px 4px}
+svg{width:100%;height:auto;display:block}svg .grid{stroke:var(--line);stroke-width:1}svg .zero{stroke:var(--muted);stroke-dasharray:4 3}
+svg .tick,svg .legend{fill:var(--muted);font-size:11px}svg .legend{fill:var(--ink)}svg .band{fill:var(--band)}
+table{width:100%;border-collapse:collapse;font-size:13.5px}th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}th{color:var(--muted);font-weight:500}.tw{overflow-x:auto}
+.pos{color:var(--good)}.neg{color:var(--bad)}.tag{display:inline-block;border-radius:6px;padding:1px 7px;font-size:12px;border:1px solid var(--line)}
+.tag.ok{border-color:var(--good);color:var(--good)}.tag.no{border-color:var(--bad);color:var(--bad)}.err{color:var(--bad)}
+footer{margin-top:40px;font-size:12.5px;color:var(--muted)}
+"""
+
+
+def _cls(v) -> str:
+    return "" if v is None or pd.isna(v) else ("pos" if v > 0 else "neg" if v < 0 else "")
+
+
+def _num(v, spec="+.2f", unit="") -> str:
+    return '<span class="muted">n/d</span>' if v is None or pd.isna(v) else f'<span class="{_cls(v)}">{format(v, spec)}{unit}</span>'
+
+
+def _table(headers: List[str], rows: List[List[str]]) -> str:
+    h = "".join(f"<th>{escape(x)}</th>" for x in headers)
+    body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return f'<div class="tw"><table><thead><tr>{h}</tr></thead><tbody>{body}</tbody></table></div>'
+
+
+def _kpi(label: str, value: str) -> str:
+    return f'<div class="kpi"><div class="l">{escape(label)}</div><div class="v">{value}</div></div>'
+
+
+def _missing(ctx: Context, name: str) -> str:
+    return f'<p class="err">Sección no disponible: {escape(ctx.errors.get(name, "sin datos"))}</p>'
+
+
+def _last_years(s: pd.Series, years: int) -> pd.Series:
+    return s[s.index >= s.index[-1] - pd.DateOffset(years=years)] if len(s) else s
+
+
+def kpis(ctx: Context) -> str:
+    snap = ctx.snap
+    y10 = snap.yields.y10 if snap is not None and snap.yields else None
+    vix = snap.volatility.vix_spot if snap is not None and snap.volatility else None
+    hy = snap.credit.hy_spread_bps if snap is not None and snap.credit else None
+    m = ctx.market
+    nc = ctx.nowcast
+    head = nc.value(nc.months[0], "headline") if nc is not None and nc.months else None
+    wti = nc.prices.get("wti") if nc is not None else None
+    cards = [
+        _kpi("Régimen de riesgo", escape(REGIME_ES.get(ctx.regime, "n/d"))),
+        _kpi("Vulnerabilidad (0–1)", _num(ctx.vulnerability, ".2f")),
+        _kpi("Escenario de mercado", escape(SCEN_ES.get(m.best, "n/d")) + f'<br><span class="tag">{STATUS_ES[m.status(m.best)]} {m.scores[m.best]:+.2f}</span>'
+             if m is not None and m.best else "n/d"),
+        _kpi("Cuadrante macro", escape(QUAD_ES.get(ctx.axes.quadrant, "n/d")) if ctx.axes else "n/d"),
+        _kpi(f"IPC estimado {nc.months[0].strftime('%m/%Y')}" if head is not None else "IPC estimado", _num(head, "+.2f", "% m/m")),
+        _kpi("Bono 10 años", _num(y10, ".2f", "%")),
+        _kpi("VIX", _num(vix, ".1f")),
+        _kpi("Spread HY", _num(hy, ".0f", " pb")),
+        _kpi("WTI", _num(float(wti.iloc[-1]) if wti is not None and len(wti) else None, ".2f", " $")),
+        _kpi("Bitcoin", _num(ctx.btc, ",.0f", " $")),
+    ]
+    return f'<div class="kpis">{"".join(cards)}</div>'
+
+
+def section_market(ctx: Context) -> str:
+    m = ctx.market
+    if m is None:
+        return _missing(ctx, "mercado")
+    rows = [[escape(MOVE_ES.get(k, r["label"])), _num(r["change"], "+.0f" if r["unit"] == "bps" else "+.1f",
+                                                       " pb" if r["unit"] == "bps" else "%" if r["unit"] == "%" else " pts"),
+             _num(r["z"], "+.1f", " sd")] for k, r in m.moves.iterrows()]
+    scen = [[escape(SCEN_ES[k]), _num(m.scores[k]),
+             f'<span class="tag {"ok" if m.status(k) == "CONFIRMED" else "no" if m.status(k) == "invalidated" else ""}">'
+             f'{STATUS_ES[m.status(k)]}</span>'] for k in m.scores.index]
+    hist = ""
+    if ctx.score_hist is not None and len(ctx.score_hist):
+        hist = charts.line_chart({SCEN_ES[c].split(" /")[0].split(" con")[0]: ctx.score_hist[c] for c in ctx.score_hist},
+                                 "Puntaje de cada escenario, último año", zero=True, note="−1 a +1")
+    s = ctx.market_series
+    rates = charts.line_chart({"10 años": _last_years(s.get("y10", pd.Series(dtype=float)), 2),
+                               "Real (TIPS)": _last_years(s.get("real10", pd.Series(dtype=float)), 2),
+                               "Breakeven": _last_years(s.get("breakeven10", pd.Series(dtype=float)), 2)},
+                              "Tasas: nominal = real + inflación esperada", unit="%")
+    watch = "".join(f"<li>{escape(w)}</li>" for w in watch_list(ctx))
+    return (f'<div class="grid2"><div class="card"><h3>Movimientos de {m.window} días</h3>'
+            f'{_table(["Variable", "Cambio", "vs normal"], rows)}</div>'
+            f'<div class="card"><h3>Escenarios</h3>{_table(["Escenario", "Puntaje", "Estado"], scen)}'
+            f'<h3>Qué vigilar</h3><ul>{watch}</ul></div></div>'
+            f'<div class="grid2">{hist}{rates}</div>')
+
+
+def section_macro(ctx: Context) -> str:
+    if ctx.axes is None:
+        return _missing(ctx, "macro")
+    gs = ctx.growth_series
+    axes_chart = charts.line_chart(dict(ctx.axes_hist.items()), "Ejes macro (15 años, con datos publicados en cada fecha)",
+                                   zero=True, note="> 0: acelera") if ctx.axes_hist is not None else ""
+    yoy = lambda s: _last_years((s / s.shift(12) - 1) * 100, 10) if len(s) else s
+    cpi_chart = charts.line_chart({"IPC general": yoy(growth._monthly(gs["cpi"]).dropna()),
+                                   "Subyacente": yoy(growth._monthly(gs["core"]).dropna())},
+                                  "IPC interanual (10 años)", unit="%")
+    claims = gs.get("claims", pd.Series(dtype=float))
+    claims_chart = charts.line_chart({"Media 4 semanas": _last_years(claims.rolling(4).mean() / 1000, 5)},
+                                     "Peticiones de subsidio por desempleo (miles)", unit="k")
+    rows = []
+    for key in ("wei", "gdpnow", "sahm", "philly_activity", "philly_orders", "philly_prices",
+                "empire_activity", "empire_orders", "empire_prices"):
+        s = gs.get(key, pd.Series(dtype=float))
+        if len(s) >= 2:
+            rows.append([escape(LEADING_ES[key]), _num(float(s.iloc[-1]), "+.2f"),
+                         _num(float(s.iloc[-1] - s.iloc[-2]), "+.2f"), s.index[-1].strftime("%d/%m/%Y")])
+    hints = "".join(f"<li>{escape(h)}</li>" for h in pmi_hints_es(ctx.leading))
+    ax = ctx.axes
+    parts = [[escape(SIGNAL_ES[k]), _num(ax.parts[k])] for k in (*growth.GROWTH, *growth.INFLATION)]
+    nca = (f"<p>Eje de inflación si el próximo IPC sale como estima el nowcast: {_num(ctx.nowcast_axis)}</p>"
+           if ctx.nowcast_axis is not None else "")
+    return (f'<div class="grid2"><div class="card"><h3>Cuadrante: {escape(QUAD_ES.get(ax.quadrant, "n/d"))}</h3>'
+            f'<p>Crecimiento {_num(ax.growth)} · Inflación {_num(ax.inflation)}</p>{nca}'
+            f'{_table(["Señal (ritmo reciente vs año)", "Valor"], parts)}</div>'
+            f'<div class="card"><h3>Indicadores adelantados</h3>{_table(["Indicador", "Último", "Cambio", "Fecha"], rows)}'
+            f'<ul>{hints}</ul></div></div>'
+            f'<div class="grid2">{axes_chart}{cpi_chart}{claims_chart}</div>')
+
+
+def section_energy(ctx: Context) -> str:
+    nc = ctx.nowcast
+    if nc is None:
+        return _missing(ctx, "ipc")
+    out = ""
+    if nc.months:
+        mo = nc.months[0]
+        t = nc.table[nc.table["month"] == mo]
+        rows = [[("&nbsp;&nbsp;" if r["item"] in cpi_nowcast.ITEMS else "") + escape(r["label"]),
+                 "" if pd.isna(r["weight"]) else f"{r['weight']:.0%}", _num(r["mm"], "+.2f", "%"),
+                 "3m" if r["kind"] == "trend" else (f"{r['low']:+.2f} a {r['high']:+.2f}" if pd.notna(r["low"]) else ""),
+                 _num(r["contribution"], "+.2f") if pd.notna(r["contribution"]) else "",
+                 _num(r["yoy"], "+.1f", "%") if r["yoy"] is not None and pd.notna(r["yoy"]) else "n/d"]
+                for _, r in t.iterrows()]
+        out += (f'<div class="card"><h3>IPC estimado de {mo.strftime("%m/%Y")} '
+                f'({nc.observed_share.get(mo, 1):.0%} del mes observado)</h3>'
+                f'{_table(["Partida", "Peso", "m/m", "Rango 90%", "Aporte (pts)", "a/a"], rows)}</div>')
+    stats = nc.stats
+    if len(stats):
+        rows = [[escape(cpi_nowcast.CPI[k][1]), f"{stats.loc[k, 'mae']:.2f}%", f"{stats.loc[k, 'naive_mae']:.2f}%",
+                 f'<span class="tag {"ok" if stats.loc[k, "mae"] < stats.loc[k, "naive_mae"] else "no"}">'
+                 f'{"sí" if stats.loc[k, "mae"] < stats.loc[k, "naive_mae"] else "no"}</span>']
+                for k in (*cpi_nowcast.ITEMS, "energy", "headline") if k in stats.index]
+        out += f'<div class="card"><h3>Validación desde 2010</h3>{_table(["Partida", "Error modelo", "Error ingenuo", "¿Mejor?"], rows)}</div>'
+    p = nc.prices
+    two = lambda k: _last_years(p.get(k, pd.Series(dtype=float)), 2)
+    out += '<div class="grid2">' + charts.line_chart({"WTI": two("wti"), "Brent": two("brent")}, "Crudo ($/bbl)", unit=" $") \
+        + charts.line_chart({"Gasolina surtidor": two("gasoline_retail"), "Diésel surtidor": two("diesel_retail")},
+                            "Precio al consumidor ($/galón)", unit=" $") \
+        + charts.line_chart({"Margen 3-2-1": _last_years(cpi_nowcast.crack_321(p), 2)}, "Margen de refino ($/bbl)", unit=" $") \
+        + charts.line_chart({"Henry Hub": two("henry_hub")}, "Gas natural ($/MMBtu)", unit=" $") + "</div>"
+    return out
+
+
+def section_risk(ctx: Context) -> str:
+    if ctx.regime is None:
+        return _missing(ctx, "riesgo")
+    s = ctx.market_series
+    comps = "".join(_kpi(COMPONENT_ES.get(k, k).capitalize(), _num(v, ".2f")) for k, v in ctx.components.items())
+    hy = s.get("credit", pd.Series(dtype=float)) * 100
+    risk = charts.line_chart({"VIX": _last_years(s.get("vix", pd.Series(dtype=float)), 2),
+                              "Spread HY (pb/10)": _last_years(hy / 10, 2)}, "Volatilidad y crédito")
+    norm = lambda x: _last_years(x, 2) / _last_years(x, 2).iloc[0] * 100 if len(x) else x
+    eq = charts.line_chart({"S&P 500": norm(s.get("equities", pd.Series(dtype=float))),
+                            "Nasdaq": norm(s.get("nasdaq", pd.Series(dtype=float)))}, "Bolsa (base 100 hace 2 años)")
+    return f'<div class="kpis">{comps}</div><div class="grid2">{risk}{eq}</div>'
+
+
+def section_evidence(ctx: Context) -> str:
+    def block(study, label, title):
+        rows = evidence_rows(study, label)
+        if study is None:
+            return f'<div class="card"><h3>{escape(title)}</h3><p class="muted">No disponible.</p></div>'
+        if rows.empty:
+            return f'<div class="card"><h3>{escape(title)}</h3><p>Ningún resultado robusto: la evidencia no apoya inclinaciones.</p></div>'
+        body = [[escape(f"{r['mark']} {r['name']}"), _num(r["mean"], "+.2f", "%"), f"{r['hit']:.0%}",
+                 f"{r['lo']:+.2f} a {r['hi']:+.2f}", f"{r['h1']:+.2f} / {r['h2']:+.2f}"] for _, r in rows.iterrows()]
+        return (f'<div class="card"><h3>{escape(title)}</h3>'
+                f'{_table(["Activo (vs mercado)", "Media mes sig.", "Acierto", "IC 95%", "Mitades"], body)}</div>')
+    conv = "".join(f"<li>{escape(c)}</li>" for c in convergence(ctx))
+    return ('<div class="grid2">' + block(ctx.regime_study, ctx.regime, f"Régimen: {REGIME_ES.get(ctx.regime, 'n/d')} (desde 1990)")
+            + block(ctx.quadrant_study, ctx.axes.quadrant if ctx.axes else None,
+                    f"Cuadrante: {QUAD_ES.get(ctx.axes.quadrant, 'n/d') if ctx.axes else 'n/d'} (desde 1972)") + "</div>"
+            + (f'<div class="card"><h3>Convergencia régimen × cuadrante</h3><ul>{conv}</ul></div>' if conv else "")
+            + '<p class="muted">** robusto (claro en toda la muestra y en cada mitad) · * coherente (claro en total, '
+              'mismo signo en ambas mitades). Asociación histórica, no previsión.</p>')
+
+
+def section_history(ctx: Context) -> str:
+    a, mdl = ctx.analogs, ctx.model
+    if a is None:
+        return _missing(ctx, "análogos y modelo")
+    feats = list(an.FEATURES)
+    head = ["Mes", "Distancia"] + [an.FEATURES[f] for f in feats] + ["Bolsa 3m", "Bolsa 6m", "Bolsa 12m", "Caída máx. 6m", "Δ10a 6m (pb)", "WTI 6m"]
+    fmt = {"vix": ".1f", "curve": "+.0f", "baa": ".2f", "y10_12m": "+.0f", "oil_12m": "+.0f", "growth": "+.2f", "inflation": "+.2f"}
+    today_row = ["<b>Hoy</b>", ""] + [_num(a.today.get(f), fmt[f]) for f in feats] + [""] * 6
+    rows = [today_row] + [[r["month"], f"{r['distance']:.2f}"] + [_num(r[f], fmt[f]) for f in feats]
+                          + [_num(r["mkt_3m"], "+.1f", "%"), _num(r["mkt_6m"], "+.1f", "%"), _num(r["mkt_12m"], "+.1f", "%"),
+                             _num(r["dd_6m"], "+.1f", "%"), _num(r["y10_6m"], "+.0f"), _num(r["oil_6m"], "+.0f", "%")]
+                          for _, r in a.table.iterrows()]
+    b = a.baseline
+    rows.append(["<i>Mediana análogos</i>", ""] + [""] * len(feats)
+                + [_num(a.table[c].median(), "+.1f" if c != "y10_6m" else "+.0f", "%" if c != "y10_6m" else "")
+                   for c in ("mkt_3m", "mkt_6m", "mkt_12m", "dd_6m", "y10_6m", "oil_6m")])
+    rows.append(["<i>Todos los meses</i>", ""] + [""] * len(feats)
+                + [_num(b.get(c), "+.1f" if c != "y10_6m" else "+.0f", "%" if c != "y10_6m" else "")
+                   for c in ("mkt_3m", "mkt_6m", "mkt_12m", "dd_6m", "y10_6m", "oil_6m")])
+    sect = ("<p>Sectores tras los análogos (6 meses, vs mercado): mejores "
+            + ", ".join(f"{escape(n)} {_num(v, '+.1f', '%')}" for n, v in a.sectors_best)
+            + "; peores " + ", ".join(f"{escape(n)} {_num(v, '+.1f', '%')}" for n, v in a.sectors_worst) + ".</p>")
+    out = f'<div class="card"><h3>Meses más parecidos a hoy (desde 1990)</h3>{_table(head, rows)}{sect}</div>'
+    if mdl is not None:
+        verdict = ('<span class="tag ok">supera a la media</span>' if mdl.useful else
+                   '<span class="tag no">no supera a la media: no usar</span>')
+        coef = [[escape(an.FEATURES.get(k, k)), _num(v, "+.2f")] for k, v in sorted(mdl.coefficients.items(), key=lambda kv: -abs(kv[1]))]
+        out += (f'<div class="grid2"><div class="card"><h3>Modelo predictivo (ridge, bolsa a 3 meses) {verdict}</h3>'
+                f'<p>R² fuera de muestra <b>{mdl.oos_r2:+.3f}</b> en {mdl.n_oos} meses desde 2005 · acierto de signo '
+                f'{mdl.hit_rate:.0%} · error medio ±{mdl.error_band:.1f}%</p>'
+                f'<p>Previsión: exceso de rentabilidad {_num(mdl.forecast, "+.1f", "%")} a 3 meses '
+                f'(media histórica {_num(mdl.baseline, "+.1f", "%")}).</p>'
+                f'<p class="muted">Cada mes se reestima solo con datos anteriores. Un R² ≤ 0 significa que la media '
+                f'histórica predice mejor que el modelo.</p></div>'
+                f'<div class="card"><h3>Peso de cada variable (estandarizado)</h3>{_table(["Variable", "Coeficiente"], coef)}'
+                f'<p class="muted">Positivo: valores altos se asocian a mayor rentabilidad posterior.</p></div></div>')
+    return out
+
+
+def render(ctx: Context) -> str:
+    gen = datetime.now().strftime("%d/%m/%Y %H:%M")
+    bullets = "".join(f"<li>{b}</li>" for b in executive(ctx))
+    errs = "".join(f"<li>{escape(k)}: {escape(v)}</li>" for k, v in ctx.errors.items())
+    sections = [
+        ("1. Qué descuenta el mercado", section_market(ctx)),
+        ("2. Crecimiento, inflación y cuadrante macro", section_macro(ctx)),
+        ("3. Energía e IPC", section_energy(ctx)),
+        ("4. Régimen de riesgo", section_risk(ctx)),
+        ("5. Evidencia sectorial", section_evidence(ctx) if ctx.regime_study or ctx.quadrant_study
+         else '<p class="muted">Omitida (--quick).</p>'),
+        ("6. Análogos históricos y modelo predictivo", section_history(ctx) if "análogos y modelo" in ctx.errors or ctx.analogs
+         else '<p class="muted">Omitida (--quick).</p>'),
+    ]
+    body = "".join(f"<h2>{escape(t)}</h2>{s}" for t, s in sections)
+    return f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Informe macro {ctx.today.isoformat()}</title><style>{CSS}</style></head>
+<body><main>
+<h1>Informe macro y de riesgo</h1>
+<p class="sub">Datos de FRED hasta {ctx.data_through or "n/d"} · generado {gen} · Macro Shock Risk Engine</p>
+{kpis(ctx)}
+<div class="card"><h3>Lectura ejecutiva</h3><ul class="exec">{bullets}</ul></div>
+{body}
+{f'<div class="card"><h3>Secciones con datos incompletos</h3><ul class="err">{errs}</ul></div>' if errs else ""}
+<footer>
+<p><b>Método.</b> Escenario de mercado: movimientos de {ms.WINDOW} días en desviaciones típicas de los últimos 3 años.
+Cuadrante: ritmo de 3 meses frente a 12 de peticiones de subsidio, producción industrial, empleo e IPC, con los retrasos de
+publicación de cada dato. Nowcast del IPC: regresiones por subpartida validadas fuera de muestra desde 2010. Sectores: French
+Data Library, robustez por mitades. Análogos: distancia euclídea en variables estandarizadas desde 1990. Modelo: ridge con
+reestimación mensual y R² fuera de muestra.</p>
+<p><b>Límites.</b> Asociaciones históricas, no previsiones garantizadas. El escenario de mercado describe lo que los precios ya
+descuentan. El PMI y el ISM no son públicos; el oro y la plata no están en FRED. Datos, no consejo: decide con tu propio plan y
+tu límite de caída.</p>
+</footer></main></body></html>"""
+
+
+def write(ctx: Context, path) -> None:
+    from pathlib import Path
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render(ctx), encoding="utf-8")

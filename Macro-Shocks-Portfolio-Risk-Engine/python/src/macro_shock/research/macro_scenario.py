@@ -183,6 +183,17 @@ def assess(series: Dict[str, pd.Series], window: int = WINDOW) -> MarketScenario
     return MarketScenario(panel.index[-1].date(), window, moves, score(z), decomp)
 
 
+def score_history(series: Dict[str, pd.Series], window: int = WINDOW, days: int = 260) -> pd.DataFrame:
+    """Each scenario's score on each of the last ``days`` trading days (scale: the last 3 years' moves)."""
+    panel = levels(series)
+    if panel.empty:
+        return pd.DataFrame()
+    ch = changes(panel, window)
+    size = ch[ch.index > ch.index[-1] - pd.DateOffset(years=HISTORY_YEARS)].std().replace(0, np.nan)
+    rows = {d: score(ch.loc[d] / size) for d in ch.index[-days:]}
+    return pd.DataFrame(rows).T.reindex(columns=list(SCENARIOS))
+
+
 def decomposition_line(ms: MarketScenario) -> Optional[str]:
     d = ms.decomposition
     if not d:
