@@ -110,6 +110,9 @@ def report_fred():
     data.update({"WALCL": pd.Series(7e6 + np.cumsum(rng.normal(0, 2e4, 330)), weeks),
                  "WTREGEN": pd.Series(800.0, weeks), "RRPONTSYD": pd.Series(150.0, days[-1600:]),
                  "DFF": pd.Series(3.9, days[-1600:])})
+    from .test_carry_track import series as carry_series
+    cs = carry_series()
+    data.update({"DEXJPUS": cs["usdjpy"], "IR3TIB01USM156N": cs["us3m"], "IR3TIB01JPM156N": cs["jp3m"]})
     # long histories for the analogs (VIX, yields and oil since 1990)
     for sid, level, vol in (("VIXCLS", 18.0, 0.5), ("DGS2", 4.0, 0.03), ("DGS10", 4.5, 0.03), ("DCOILWTICO", 60.0, 0.5)):
         long = pd.Series(level + np.cumsum(rng.normal(0, vol, len(days))) * 0.1, days).clip(lower=1.0)
@@ -138,10 +141,13 @@ class TestReportCommand:
         for part in ("Lectura ejecutiva", "1. Qué descuenta el mercado", "2. Crecimiento", "3. Energía e IPC",
                      "4. Régimen de riesgo", "5. Evidencia sectorial", "6. Análogos históricos",
                      "Meses más parecidos a hoy", "Modelo predictivo", "Shock de oferta", "7. Cripto", "ONDO",
-                     "Alertas cripto", "8. Liquidez de la Fed", "Liquidez neta", "9. Salud de los datos", "al día"):
+                     "Alertas cripto", "8. Liquidez de la Fed", "Liquidez neta", "9. Carry del yen", "subidas bruscas del yen",
+                     "10. Historial de aciertos", "previsiones registradas", "11. Salud de los datos", "al día"):
             assert part in html, part
         assert html.count("<svg") >= 10
         assert "Secciones con datos incompletos" not in html
+        log = (tmp_path / "predicciones.csv").read_text()
+        assert "cpi" in log and "analogs" in log and "model" in log
 
     def test_quick_report_and_missing_section(self, monkeypatch, capsys, tmp_path, report_fred):
         from macro_shock import __main__ as cli

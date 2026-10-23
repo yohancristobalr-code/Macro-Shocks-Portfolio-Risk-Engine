@@ -24,7 +24,8 @@ import structlog
 
 from macro_shock.research import analogs as an
 from macro_shock.research import charts, cpi_nowcast, growth, macro, macro_scenario as ms, sector_study
-from macro_shock.research import crypto as cr, data_health, french, liquidity as lq
+from macro_shock.research import carry as cy, crypto as cr, data_health, french, liquidity as lq
+from macro_shock.research import track_record as tr
 
 logger = structlog.get_logger(__name__)
 
@@ -82,6 +83,10 @@ class Context:
     liq_series: Dict[str, pd.Series] = field(default_factory=dict)
     liquidity: Optional[lq.Liquidity] = None
     health: Optional[pd.DataFrame] = None
+    carry_series: Dict[str, pd.Series] = field(default_factory=dict)
+    carry: Optional[cy.Carry] = None
+    track_log: Optional[pd.DataFrame] = None
+    track_scored: Optional[pd.DataFrame] = None
 
 
 def _try(ctx: Context, name: str, fn):
@@ -93,7 +98,7 @@ def _try(ctx: Context, name: str, fn):
         return None
 
 
-def gather(fred, today: Optional[date] = None, quick: bool = False) -> Context:
+def gather(fred, today: Optional[date] = None, quick: bool = False, track_path=None) -> Context:
     from macro_shock.data.feed_provider import FREDFeedProvider
     from macro_shock.event_detection.calendar import MarketCalendar
     from macro_shock.market_context.vulnerability_scorer import MarketVulnerabilityScorer
@@ -159,9 +164,16 @@ def gather(fred, today: Optional[date] = None, quick: bool = False) -> Context:
         ctx.liquidity = lq.assess(ctx.liq_series, assets)
     _try(ctx, "liquidez", fed_liquidity)
 
+    def yen_carry():
+        ctx.carry_series = cy.fetch(fred, ctx.today)
+        assets = {"Nasdaq": ctx.market_series.get("nasdaq")}
+        if ctx.crypto is not None:
+            assets["BTC"] = ctx.crypto.data.prices["BTC"].dropna()
+        ctx.carry = cy.assess(ctx.carry_series, assets)
+    _try(ctx, "carry del yen", yen_carry)
+
     if quick:
-        ctx.health = health(ctx)
-        return ctx
+        return finish(ctx, track_path)
     ctx.regime_study = _try(ctx, "sectores por régimen", lambda: sector_study.run(fred, date(1990, 1, 1)))
     if ctx.sig is not None:
         ctx.quadrant_study = _try(ctx, "sectores por cuadrante",
@@ -174,6 +186,17 @@ def gather(fred, today: Optional[date] = None, quick: bool = False) -> Context:
             ctx.analogs = an.analogs(df, today_state, mkt)
             ctx.model = an.model(df, today_state)
         _try(ctx, "análogos y modelo", history)
+    return finish(ctx, track_path)
+
+
+def finish(ctx: Context, track_path) -> Context:
+    """Log today's forecasts, score the past ones, and check the data's freshness."""
+    if track_path is not None:
+        def track():
+            log = tr.record(track_path, tr.forecasts(ctx.today, ctx.nowcast, ctx.analogs, ctx.model))
+            ctx.track_log = log
+            ctx.track_scored = tr.score(log, ctx.growth_series.get("cpi"), ctx.market_series.get("equities"))
+        _try(ctx, "historial de aciertos", track)
     ctx.health = health(ctx)
     return ctx
 
@@ -181,7 +204,7 @@ def gather(fred, today: Optional[date] = None, quick: bool = False) -> Context:
 def health(ctx: Context) -> pd.DataFrame:
     """Freshness of every series gathered (no extra downloads)."""
     sources = {"FRED mercado": ctx.market_series, "FRED crecimiento": ctx.growth_series,
-               "FRED liquidez": ctx.liq_series}
+               "FRED liquidez": ctx.liq_series, "FRED carry del yen": ctx.carry_series}
     if ctx.nowcast is not None:
         sources["FRED energía"] = ctx.nowcast.prices
     if ctx.crypto is not None:
@@ -347,6 +370,11 @@ def executive(ctx: Context) -> List[str]:
                    f"{_pct(lq_.change_13w, '+,.0f', ' mil millones')} en 13 semanas"
                    + (f"; el mercado descuenta {'subidas' if exp > 15 else 'bajadas' if exp < -15 else 'tipos estables'} "
                       f"(2 años − fed funds {exp:+.0f} pb)" if exp is not None else "") + ".")
+    cy_ = ctx.carry
+    if cy_ is not None:
+        msg = (f"<b>Carry del yen:</b> USDJPY {cy_.usdjpy.iloc[-1]:.2f}, {cy_.change_10d:+.1f}% en 10 días, "
+               f"volatilidad en el percentil {cy_.vol_pct:.0%} de 3 años")
+        out.append(msg + (". <b>Señal de desmontaje del carry</b>: riesgo para Nasdaq y cripto." if cy_.unwind_now else "."))
     h = ctx.health
     if h is not None and len(h):
         bad = h[h["status"] != "ok"]
@@ -699,6 +727,42 @@ def section_health(ctx: Context) -> str:
             f'{_table(["Fuente", "Serie", "Último dato", "Días", "Frecuencia", "Estado"], rows)}</details></div>')
 
 
+def section_carry(ctx: Context) -> str:
+    c = ctx.carry
+    if c is None:
+        return _missing(ctx, "carry del yen")
+    cards = [_kpi("USDJPY", f"{c.usdjpy.iloc[-1]:.2f}"), _kpi("Cambio 10 días", _num(c.change_10d, "+.1f", "%")),
+             _kpi("Volatilidad 20 días", f"{c.vol:.1f}% <span class='muted'>p{c.vol_pct * 100:.0f}</span>"),
+             _kpi("Diferencial 3m EE. UU. − Japón", _num(c.differential, "+.2f", " pp")),
+             _kpi("Carry / riesgo", _num(c.carry_to_risk, ".2f")),
+             _kpi("Señal de desmontaje", '<span class="tag no">activa</span>' if c.unwind_now else '<span class="tag ok">no</span>')]
+    rows = [[escape(k), str(int(h["n"])), _num(h["mean_after"], "+.1f", "%"), _num(h["median_after"], "+.1f", "%"),
+             f"{h['hit_down']:.0%}", _num(h["mean_all"], "+.1f", "%")] for k, h in c.history.items()]
+    hist = (f'<div class="card"><h3>Qué pasó tras subidas bruscas del yen (≥ 3% en 10 días) desde 2000</h3>'
+            f'{_table(["Activo", "Episodios", "Media 30d", "Mediana 30d", "Cayó", "Media de cualquier 30d"], rows)}'
+            f'<p class="muted">Últimos episodios: {", ".join(str(d.date()) for d in c.last_unwinds)}</p></div>') if rows else ""
+    return (f'<div class="kpis">{"".join(cards)}</div>{hist}<div class="grid2">'
+            + charts.line_chart({"USDJPY": _last_years(c.usdjpy, 3)}, "Dólar/yen (3 años)", note="bajadas = yen más fuerte")
+            + "</div>")
+
+
+def section_track(ctx: Context) -> str:
+    if ctx.track_log is None:
+        return '<p class="muted">Se activa al generar el informe con el comando `report`.</p>'
+    lines = "".join(f"<li>{escape(x)}</li>" for x in tr.summary(ctx.track_scored, ctx.track_log))
+    sc = ctx.track_scored
+    table = ""
+    if sc is not None and len(sc):
+        names = {"cpi": "IPC m/m", "analogs": "Bolsa 6m (análogos)", "model": "Bolsa 3m (modelo)"}
+        rows = [[escape(r["run_date"]), escape(names.get(r["kind"], r["kind"])), escape(str(r["target"])),
+                 _num(r["value"], "+.2f"), _num(r["actual"], "+.2f"), _num(r["error"], "+.2f"),
+                 "" if pd.isna(r["inside"]) else ("sí" if r["inside"] else "no")]
+                for _, r in sc.sort_values("run_date", ascending=False).head(15).iterrows()]
+        table = _table(["Fecha", "Previsión", "Objetivo", "Estimado", "Real", "Error", "En rango"], rows)
+    return (f'<div class="card"><ul>{lines}</ul>{table}<p class="muted">Registro: reports\\predicciones.csv. '
+            'El IPC se evalúa al publicarse; los análogos a los 6 meses y el modelo a los 3 meses (S&P 500 sin dividendos).</p></div>')
+
+
 def render(ctx: Context) -> str:
     gen = datetime.now().strftime("%d/%m/%Y %H:%M")
     bullets = "".join(f"<li>{b}</li>" for b in executive(ctx))
@@ -714,7 +778,9 @@ def render(ctx: Context) -> str:
          else '<p class="muted">Omitida (--quick).</p>'),
         ("7. Cripto", section_crypto(ctx)),
         ("8. Liquidez de la Fed", section_liquidity(ctx)),
-        ("9. Salud de los datos", section_health(ctx)),
+        ("9. Carry del yen", section_carry(ctx)),
+        ("10. Historial de aciertos del motor", section_track(ctx)),
+        ("11. Salud de los datos", section_health(ctx)),
     ]
     body = "".join(f"<h2>{escape(t)}</h2>{s}" for t, s in sections)
     return f"""<!doctype html>

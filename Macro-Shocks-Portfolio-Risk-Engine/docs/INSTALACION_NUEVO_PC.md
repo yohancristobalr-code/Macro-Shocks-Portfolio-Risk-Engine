@@ -46,6 +46,11 @@ Doble clic en **"Informe Macro"** del escritorio. En 1–3 minutos se abre en el
 | 4. Régimen de riesgo | Componentes de vulnerabilidad, VIX, crédito y bolsa |
 | 5. Evidencia sectorial | Sectores y estilos con evidencia `**`/`*` en el régimen y en el cuadrante, y su convergencia |
 | 6. Análogos y modelo | Los meses más parecidos desde 1990 y qué pasó después; modelo predictivo con su R² fuera de muestra |
+| 7. Cripto | 10 monedas, apalancamiento (funding), sentimiento, stablecoins y régimen cripto |
+| 8. Liquidez de la Fed | Liquidez neta, expectativas de tipos y su relación medida con el Nasdaq y BTC |
+| 9. Carry del yen | Riesgo de desmontaje del carry trade y qué pasó en episodios anteriores |
+| 10. Historial de aciertos | Cuánto acertaron las previsiones de informes anteriores |
+| 11. Salud de los datos | Qué series están al día y cuáles fallaron |
 
 Cada informe se guarda en `reports\informe_AAAA-MM-DD.html`, así que tendrás un historial que puedes comparar.
 
@@ -99,10 +104,9 @@ Por orden de valor. Cada paso es independiente y se puede construir con datos gr
 
 1. **Validar el primer motor con comunicados reales**: pasar por `analyze` los textos de las reuniones de la Fed desde 2017 y medir si el puntaje de riesgo anticipa los movimientos del bono a 2 años, la bolsa y el VIX.
 2. **Expectativas de la Fed antes de cada reunión**: usar el diferencial bono a 2 años − tipo de la Fed (`DGS2` − `DFF`) como referencia para medir la sorpresa frente al mercado.
-3. **Historial de aciertos**: guardar cada nowcast del IPC y cada escenario, y compararlos con lo que ocurrió.
-4. **Completar el clasificador de riesgo** con divisas y materias primas, para pasar de 5 a 7 de los 8 grupos de datos.
-5. **Caché local de datos**: informes más rápidos y que funcionen aunque FRED esté caído.
-6. **Europa**: IPC armonizado y tipos del BCE desde el portal de datos del BCE, que es gratuito.
-7. **Avisos automáticos**: enviar las alertas de `daily` por correo o Telegram, y programar el informe antes de la apertura.
+3. **Completar el clasificador de riesgo** con divisas y materias primas, para pasar de 5 a 7 de los 8 grupos de datos.
+4. **Caché local de datos**: informes más rápidos y que funcionen aunque FRED esté caído.
+5. **Europa**: IPC armonizado y tipos del BCE desde el portal de datos del BCE, que es gratuito.
+6. **Avisos automáticos**: enviar las alertas de `daily` por correo o Telegram, y programar el informe antes de la apertura.
 
 Regla para cada mejora nueva: **tests con datos sintéticos de respuesta conocida, validación fuera de muestra y documentación en español**, como en todo lo construido hasta ahora.
