@@ -65,6 +65,27 @@ Debe terminar con `passed` y sin `failed`.
 
 Todos se ejecutan con `python -m macro_shock <comando>`. Añade `--help` a cualquiera para ver sus opciones.
 
+**Referencia rápida** (versión 1.2; un comando por línea en PowerShell, desde la carpeta interior):
+
+```powershell
+python -m macro_shock report --open          # informe ejecutivo completo (o doble clic en "Informe Macro")
+python -m macro_shock report --quick --open  # sin sectores por régimen, análogos ni modelo
+python -m macro_shock daily                  # informe diario completo con alertas
+python -m macro_shock daily --quick          # versión rápida
+python -m macro_shock macro                  # escenario, crecimiento, inflación, cuadrante y sectores
+python -m macro_shock macro --quick          # sin sectores por cuadrante (antes del PMI)
+python -m macro_shock nowcast                # IPC estimado por subpartidas energéticas
+python -m macro_shock crypto                 # eje cripto y liquidez de la Fed
+python -m macro_shock sector-study           # sectores y estilos por régimen desde 1990
+python -m macro_shock optimize --max-drawdown 0.25   # pesos con tu límite de caída
+python -m macro_shock fomc-study             # bitcoin, bolsa y VIX ante la Fed
+python -m macro_shock analyze --title "FOMC" --institution "Federal Reserve" --event-time "2026-12-09T14:00:00-05:00" --data fred --text "TEXTO" --portfolio portfolio.csv --sectors --inflation
+python -m macro_shock demo --all             # escenarios de demostración, sin datos
+python -m pytest python/tests/unit -q        # comprobar que todo funciona
+```
+
+Instalación o actualización en cualquier PC: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1` ([INSTALACION_NUEVO_PC.md](INSTALACION_NUEVO_PC.md)). Contexto completo del proyecto: [PROYECTO.md](PROYECTO.md).
+
 | Comando | Qué responde | Frecuencia |
 |---|---|---|
 | `daily` | ¿Cómo está el mercado hoy? ¿Cambió algo? | Diaria |

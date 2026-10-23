@@ -5,7 +5,7 @@
 > **Language Stack:** Python 3.11 · C++17 · C# 10 (.NET 6)  
 > **Maintained by:** Quantitative Research & Risk Engineering  
 
-> **Uso en español:** [Guía de uso](Macro-Shocks-Portfolio-Risk-Engine/docs/GUIA_USO.md) · [Hoja de ruta operativa diaria](Macro-Shocks-Portfolio-Risk-Engine/docs/RUTINA_DIARIA.md)
+> **Uso en español:** [Proyecto y contexto](Macro-Shocks-Portfolio-Risk-Engine/docs/PROYECTO.md) · [Guía de uso](Macro-Shocks-Portfolio-Risk-Engine/docs/GUIA_USO.md) · [Rutina diaria](Macro-Shocks-Portfolio-Risk-Engine/docs/RUTINA_DIARIA.md) · [Instalación en otro PC](Macro-Shocks-Portfolio-Risk-Engine/docs/INSTALACION_NUEVO_PC.md) · [Control de cambios](Macro-Shocks-Portfolio-Risk-Engine/docs/CAMBIOS.md)
 
 ---
 
