@@ -3,6 +3,7 @@
 Presentación, estado actual, fórmulas a revisar, hoja de ruta y contexto para continuar el desarrollo en otra conversación o con otra persona.
 
 Documentos relacionados:
+- [COMANDOS.md](COMANDOS.md): hoja de comandos para instalar, actualizar y generar el informe HTML.
 - [GUIA_USO.md](GUIA_USO.md): el manual, con todos los comandos.
 - [RUTINA_DIARIA.md](RUTINA_DIARIA.md): qué hacer cada día, semana y mes.
 - [INSTALACION_NUEVO_PC.md](INSTALACION_NUEVO_PC.md): instalación en otro PC.
