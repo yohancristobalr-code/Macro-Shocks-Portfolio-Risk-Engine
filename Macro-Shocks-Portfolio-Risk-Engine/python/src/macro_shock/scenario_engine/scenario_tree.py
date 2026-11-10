@@ -3,18 +3,16 @@ scenario_engine/scenario_tree.py
 
 Shock Propagation and Scenario Tree Engine.
 
-Builds a probability-weighted scenario tree for a macro event, conditioned on:
+Builds a scenario-weighted tree for a macro event, conditioned on:
 1. The policy surprise vector (magnitude and direction)
 2. Pre-event market vulnerability (regime, vol level, liquidity)
 3. Event type and timing (weekend gap, emergency, etc.)
 
-Scenarios are calibrated to historical event distributions.
-Each scenario carries explicit impact estimates, a probability, and
-liquidity/trading-halt assumptions.
-
-Uncertainty: scenario probabilities are point estimates, not exact.
-In production, confidence intervals should be communicated alongside
-any single probability estimate.
+Scenario weights are heuristic priors conditioned on surprise and regime.
+They are normalized to sum to one for aggregation, but are NOT empirically
+calibrated probabilities and must not be interpreted as forecast odds.
+Historical calibration, out-of-sample validation, and uncertainty intervals
+are required before probabilistic interpretation.
 """
 
 from __future__ import annotations
@@ -43,8 +41,8 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Scenario Definitions
 # ---------------------------------------------------------------------------
-# Base scenarios. Probabilities are set to 1.0 (placeholder) and are
-# conditioned/re-weighted by the scenario engine based on the context.
+# Base heuristic weights. These are not empirically calibrated probabilities;
+# they are conditioned/re-weighted and normalized for scenario aggregation.
 
 SCENARIO_TEMPLATES = [
     {
