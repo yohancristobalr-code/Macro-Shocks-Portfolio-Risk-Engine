@@ -153,6 +153,11 @@ class CompositeRiskScorer:
         self.min_data_quality_for_high_confidence = self.config.get(
             "min_data_quality_high_confidence", 0.75
         )
+        self.min_data_quality_for_scoring = self.config.get(
+            "min_data_quality_for_scoring", 0.60
+        )
+        if not 0.0 <= self.min_data_quality_for_scoring <= 1.0:
+            raise ValueError("min_data_quality_for_scoring must be between 0 and 1")
 
     def score(
         self,
@@ -230,6 +235,19 @@ class CompositeRiskScorer:
             surprise_vector.confidence,
         )
         reliability = self._assess_reliability(data_quality, event)
+        scoreable = data_quality >= self.min_data_quality_for_scoring
+        if not scoreable:
+            # Preserve the decomposition for diagnosis, but suppress the aggregate
+            # and any action recommendation when coverage is insufficient.
+            final_composite = 0.0
+            severity = SeverityLevel.INFORMATIONAL
+            action_level = "NOT_SCORABLE"
+            summary = (
+                "NOT_SCORABLE: insufficient input coverage; "
+                f"data quality={data_quality:.2f}, required="
+                f"{self.min_data_quality_for_scoring:.2f}. Do not use for decisions."
+            )
+            reliability = "NOT_SCORABLE"
 
         score = CompositeRiskScore(
             event_id=event.event_id,
