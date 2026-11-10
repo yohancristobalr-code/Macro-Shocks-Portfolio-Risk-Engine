@@ -40,3 +40,22 @@ Date: 2026-11-09
 - Heuristic scenario weights must not be presented as empirically calibrated probabilities.
 - Forecast emissions must be append-only and uniquely identifiable.
 - Tests must cover edge cases and point-in-time behavior; passing unit tests alone does not establish market predictive validity.
+
+## Phase 1 implementation record (2026-11-09)
+
+Implemented on this branch:
+- Vulnerability scoring now exposes `scoreable`, defaults coverage to zero, avoids a fabricated 0.5 composite when no data exists, and returns `UNKNOWN` unless coverage passes the configured threshold and core liquidity/volatility/credit dimensions are present.
+- Percentile interpolation now maps P10/P90 continuously to 0/1 and rejects non-increasing calibration knots.
+- Historical regime percentile ranks use expanding point-in-time samples; BAA proxy knots are recalculated using observations available at each historical date.
+- Historical macro-scenario standardization now uses only the trailing three-year sample available as of each scored date, with a minimum sample requirement.
+- Weekend-gap confidence proxy now increases with coverage rather than decreasing with it. It remains a coverage proxy, not calibrated confidence.
+- Scenario weights are explicitly documented and tagged as heuristic, not empirically calibrated probabilities.
+- Composite risk output is marked `NOT_SCORABLE` and its aggregate score/action are suppressed below the configured minimum data-quality threshold.
+- Forecast track record now appends every emission with a unique forecast ID, emission timestamp, and methodology-version field; legacy CSV rows are retained and read compatibly.
+- Added unit tests for empty-data scoreability, percentile endpoint continuity, point-in-time percentile ranks, and append-only forecast revisions.
+
+## Verification status
+- Source changes and unit tests have been committed to the isolated branch.
+- Tests have **not yet been executed** in this session. CI results are pending.
+- These changes address identified data-integrity and labeling defects; they do not validate market predictive power or calibrate scenario probabilities.
+- Phase 1 is a first implementation pass. H-04 to H-09 backtesting/multicount metrics remain outside this pass and require separate follow-up.
