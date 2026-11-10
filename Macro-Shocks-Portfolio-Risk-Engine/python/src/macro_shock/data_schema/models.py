@@ -430,7 +430,8 @@ class ScenarioOutcome(BaseModel):
 
 
 class ScenarioTree(BaseModel):
-    """Probability-weighted scenario tree for the event."""
+    """Scenario tree; default weights are heuristic and not calibrated probabilities."""
+    probability_method: str = "heuristic_weights_not_calibrated"
     tree_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     event_id: str
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
