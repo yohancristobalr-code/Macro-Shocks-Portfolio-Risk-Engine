@@ -46,14 +46,16 @@ class TestClassify:
     def test_calm_and_stressed_markets(self):
         scorer = MarketVulnerabilityScorer()
         when = pd.Timestamp("2024-03-12")
-        assert rh.classify(scorer, when, **CALM, hy_bps=260, ig_bps=55) == "risk_on_expansion"
-        assert rh.classify(scorer, when, **STRESSED, hy_bps=900, ig_bps=250) == "risk_off_correction"
+        assert rh.classify(scorer, when, **CALM, hy_bps=260, ig_bps=55,
+                           stress_pct=0.10, conditions_pct=0.10) == "risk_on_expansion"
+        assert rh.classify(scorer, when, **STRESSED, hy_bps=900, ig_bps=250,
+                           stress_pct=0.95, conditions_pct=0.95) == "risk_off_correction"
 
     def test_crisis_needs_the_stress_index(self):
         scorer = MarketVulnerabilityScorer()
         when = pd.Timestamp("2008-10-10")
         panic = dict(vix=70.0, y2=1.5, y10=3.8, hy_bps=1500, ig_bps=500)
-        assert rh.classify(scorer, when, **panic) == "risk_off_correction"          # no liquidity data
+        assert rh.classify(scorer, when, **panic) == "unknown"  # critical liquidity inputs absent
         assert rh.classify(scorer, when, **panic, stress_pct=0.99, conditions_pct=0.98) == "crisis"
 
     def test_stress_percentiles_raise_vulnerability(self):
@@ -73,7 +75,8 @@ class TestHistoryPercentiles:
 
     def test_rank_within_history(self):
         s = pd.Series([3.0, 1.0, 2.0, 2.0], index=pd.date_range("2024-01-05", periods=4, freq="W-FRI"))
-        assert list(rh.history_percentiles(s)) == [1.0, 0.25, 0.75, 0.75]
+        # Expanding ranks use only observations available before each timestamp.
+        assert list(rh.history_percentiles(s)) == pytest.approx([0.5, 1 / 3, 1 / 3, 0.5])
 
 
 def fred_data(start="2014-01-01", end="2024-06-28", stress_from="2020-02-20", stress_to="2020-06-30",
@@ -98,11 +101,19 @@ def fred_data(start="2014-01-01", end="2024-06-28", stress_from="2020-02-20", st
         ig = np.array([m["ig_spread_bps"] for m in mapped]) / 100
     else:
         hy, ig = np.where(stressed[ice], 9.0, 2.7), np.where(stressed[ice], 2.5, 0.6)
+    # Weekly liquidity/stress series let regime fixtures satisfy the scorer's
+    # minimum coverage contract while retaining a clearly stressed 2020 episode.
+    weeks = pd.date_range(start, end, freq="W-FRI")
+    weekly_stress = (weeks >= stress_from) & (weeks <= stress_to)
+    stress_values = np.where(weekly_stress, 3.0, -0.5 + 0.05 * np.sin(np.arange(len(weeks)) / 7))
+    conditions_values = np.where(weekly_stress, 0.8, -0.2 + 0.03 * np.cos(np.arange(len(weeks)) / 9))
     return {
         "VIXCLS": pd.Series(vix, index=days), "DGS2": pd.Series(y2, index=days),
         "DGS10": pd.Series(y10, index=days), "BAA10Y": pd.Series(baa, index=days),
         "BAMLH0A0HYM2": pd.Series(hy, index=days[ice]),
         "BAMLC0A0CM": pd.Series(ig, index=days[ice]),
+        "STLFSI4": pd.Series(stress_values, index=weeks),
+        "NFCI": pd.Series(conditions_values, index=weeks),
     }
 
 
@@ -160,9 +171,10 @@ class TestRegimeHistory:
         assert list(labels) == ["risk_on_expansion", "crisis"]
 
     def test_missing_stress_indices_do_not_stop_the_history(self):
-        series = self._series()            # fred_data() has no STLFSI4/NFCI
-        assert series["stress"].empty and series["conditions"].empty
-        assert rh.regime_history(series, [pd.Timestamp("2020-04-01")]).iloc[0] == "risk_off_correction"
+        series = self._series()
+        series["stress"] = pd.Series(dtype=float)
+        series["conditions"] = pd.Series(dtype=float)
+        assert rh.regime_history(series, [pd.Timestamp("2020-04-01")]).iloc[0] == "unknown"
 
     def test_proxy_agrees_fully_when_ice_is_its_quantile_image(self):
         check = rh.credit_proxy_agreement(self._series(ice_matches_proxy=True))
