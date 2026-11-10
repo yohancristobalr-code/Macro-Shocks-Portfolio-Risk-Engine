@@ -600,7 +600,8 @@ class BacktestResult(BaseModel):
 
     # Risk metrics
     expected_shortfall_5pct: float = 0.0
-    max_drawdown: float = 0.0
+    max_drawdown: float = 0.0  # Compounded strategy-P&L drawdown, decimal return
+    max_event_loss: float = 0.0  # Worst single-event SPX return, decimal return
     tail_loss_1pct: float = 0.0
     avg_weekend_gap_estimate_error: float = 0.0
 
