@@ -428,14 +428,23 @@ class BacktestEngine:
         if not outcomes:
             return BacktestResult(n_events=len(all_events))
 
-        scores = [o.predicted_composite_score for o in outcomes if o.predicted_composite_score is not None]
+        # Build paired observations by event_id; never align independent filtered lists
+        # by position, because missing outcomes can silently compare different events.
+        paired = [
+            (o.predicted_composite_score, o.spx_1d_return)
+            for o in outcomes
+            if o.predicted_composite_score is not None and o.spx_1d_return is not None
+        ]
+        scores = [score for score, _ in paired]
+        paired_returns = [ret for _, ret in paired]
+        # Tail-risk metrics use every realized return, even when a prediction is absent.
         realized_returns = [o.spx_1d_return for o in outcomes if o.spx_1d_return is not None]
         predicted_impacts = [o.predicted_equity_impact for o in outcomes if o.predicted_equity_impact is not None]
 
-        # Score accuracy: correlation between composite score and realized severity
+        # Score accuracy: correlation between each event's score and its own realized severity.
         score_accuracy = 0.0
-        if len(scores) > 5 and len(realized_returns) >= len(scores):
-            neg_returns = [-r for r in realized_returns[:len(scores)]]
+        if len(paired) > 5:
+            neg_returns = [-ret for ret in paired_returns]
             if np.std(scores) > 0 and np.std(neg_returns) > 0:
                 score_accuracy = float(np.corrcoef(scores, neg_returns)[0, 1])
 
@@ -471,12 +480,28 @@ class BacktestEngine:
             expected_shortfall_5pct = float(
                 np.mean(negative_returns[negative_returns <= np.percentile(negative_returns, 5)])
             ) if len(negative_returns) > 0 else 0.0
-            max_drawdown = float(np.min(arr)) if len(arr) > 0 else 0.0
+            # Event loss is a single-observation tail metric, not portfolio drawdown.
+            max_event_loss = float(np.min(arr))
             tail_loss_1pct = float(np.percentile(arr, 1)) if len(arr) >= 100 else float(np.min(arr))
         else:
             expected_shortfall_5pct = 0.0
-            max_drawdown = 0.0
+            max_event_loss = 0.0
             tail_loss_1pct = 0.0
+
+        # Strategy drawdown is computed from the chronological compounded P&L
+        # series. Event-level SPX returns are not a substitute for a strategy NAV.
+        strategy_outcomes = sorted(
+            (o for o in outcomes if o.strategy_pnl_bps is not None),
+            key=lambda o: o.event_date,
+        )
+        if strategy_outcomes:
+            strategy_returns = np.array([o.strategy_pnl_bps / 10000.0 for o in strategy_outcomes], dtype=float)
+            equity_curve = np.cumprod(1.0 + strategy_returns)
+            running_peak = np.maximum.accumulate(np.concatenate(([1.0], equity_curve)))[1:]
+            drawdowns = equity_curve / running_peak - 1.0
+            max_drawdown = float(np.min(drawdowns))
+        else:
+            max_drawdown = 0.0
 
         # Weekend gap accuracy
         weekend_outcomes = [o for o in outcomes if o.is_weekend and
@@ -516,6 +541,7 @@ class BacktestEngine:
             recall_at_critical=recall_at_critical,
             expected_shortfall_5pct=expected_shortfall_5pct,
             max_drawdown=max_drawdown,
+            max_event_loss=max_event_loss,
             tail_loss_1pct=tail_loss_1pct,
             avg_weekend_gap_estimate_error=gap_error,
             regime_breakdown=regime_breakdown,
@@ -531,10 +557,12 @@ class BacktestEngine:
         train_fraction: float = 0.70,
     ) -> Tuple[BacktestResult, BacktestResult]:
         """
-        Split events into train and validation sets by time.
+        Split events into chronological training and holdout evaluation sets.
         Returns (train_result, validation_result).
 
-        Validation set is strictly out-of-sample (later in time than training).
+        IMPORTANT: this method does not fit or calibrate model parameters. It is a
+        chronological holdout split only, not a complete walk-forward calibration.
+        The validation events are later in time and are not used to alter training.
         """
         events_sorted = sorted(events, key=lambda e: e.event_date)
         split_idx = int(len(events_sorted) * train_fraction)

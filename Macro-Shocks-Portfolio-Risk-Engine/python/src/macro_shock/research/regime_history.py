@@ -18,6 +18,7 @@ give the same regime over the years where FRED has the ICE series.
 
 from __future__ import annotations
 
+from bisect import bisect_right, insort
 from datetime import date, datetime, timezone
 from typing import Dict, Iterable, Optional
 
@@ -68,12 +69,26 @@ def fetch_series(fred, start: date, end: date) -> Dict[str, pd.Series]:
 
 
 def history_percentiles(s: pd.Series) -> pd.Series:
-    """Each observation's percentile within the whole series (0-1; 1 = highest)."""
-    return s.rank(pct=True, method="max") if len(s) else s
+    """Expanding point-in-time percentile; each value uses only data available by that date."""
+    clean = s.dropna().sort_index()
+    if clean.empty:
+        return pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+    ordered, values = [], []
+    for timestamp, value in clean.items():
+        x = float(value)
+        values.append(bisect_right(ordered, x) / (len(ordered) + 1))
+        insort(ordered, x)
+    return pd.Series(values, index=clean.index, dtype=float)
 
 
-def proxy_knots(baa: pd.Series) -> np.ndarray:
-    return np.percentile(baa.dropna().to_numpy(dtype=float), KNOT_PERCENTILES)
+def proxy_knots(baa: pd.Series, as_of: Optional[pd.Timestamp] = None) -> np.ndarray:
+    """Calibration knots from the expanding sample available as of the requested date."""
+    available = baa.dropna()
+    if as_of is not None:
+        available = available[available.index <= as_of]
+    if available.empty:
+        return np.array([], dtype=float)
+    return np.percentile(available.to_numpy(dtype=float), KNOT_PERCENTILES)
 
 
 def baa_to_spreads(baa_value: float, knots: np.ndarray) -> Dict[str, float]:
@@ -122,7 +137,6 @@ def regime_history(
     ``credit="proxy"`` uses BAA10Y, ``credit="ice"`` the real ICE spreads.
     """
     scorer = scorer or MarketVulnerabilityScorer()
-    knots = proxy_knots(series["baa"])
     pcts = {k: history_percentiles(series.get(k, pd.Series(dtype=float))) for k in OPTIONAL}
     out = {}
     for d in pd.DatetimeIndex(dates):
@@ -130,7 +144,8 @@ def regime_history(
         stress, conditions = (_asof(pcts[k], d, WEEKLY_MAX_STALENESS_DAYS) for k in OPTIONAL)
         if credit == "proxy":
             baa = _asof(series["baa"], d)
-            spreads = baa_to_spreads(baa, knots) if baa is not None else None
+            knots = proxy_knots(series["baa"], d)
+            spreads = baa_to_spreads(baa, knots) if baa is not None and len(knots) == len(KNOT_PERCENTILES) else None
         else:
             hy, ig = _asof(series["hy"], d), _asof(series["ig"], d)
             spreads = {"hy_spread_bps": hy * 100, "ig_spread_bps": ig * 100} if None not in (hy, ig) else None

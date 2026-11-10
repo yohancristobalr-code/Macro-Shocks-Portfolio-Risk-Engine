@@ -243,3 +243,42 @@ class TestBacktestResultAggregation:
         ]
         result = eng._aggregate_results(outcomes, outcomes, 0)
         assert result.recall_at_critical == pytest.approx(0.5)
+
+
+    def test_score_accuracy_pairs_score_and_return_within_same_event(self):
+        """A missing prediction must not shift returns onto a different event."""
+        from macro_shock.backtesting.event_study import BacktestEngine, EventOutcome
+        eng = BacktestEngine.__new__(BacktestEngine)
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        outcomes = [
+            EventOutcome(
+                event_id=f"E{i}", event_date=base + timedelta(days=i),
+                event_type=EventType.PRESS_CONFERENCE, is_weekend=False,
+                predicted_composite_score=float(i * 10) if i != 2 else None,
+                spx_1d_return=-float(i) / 100.0,
+            )
+            for i in range(7)
+        ]
+        result = eng._aggregate_results(outcomes, [], 0)
+        expected_scores = np.array([0., 10., 30., 40., 50., 60.])
+        expected_severity = np.array([0., 1., 3., 4., 5., 6.])
+        expected = float(np.corrcoef(expected_scores, expected_severity)[0, 1])
+        assert result.score_accuracy == pytest.approx(expected)
+
+    def test_drawdown_is_strategy_path_and_event_loss_is_separate(self):
+        from macro_shock.backtesting.event_study import BacktestEngine, EventOutcome
+        eng = BacktestEngine.__new__(BacktestEngine)
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        outcomes = [
+            EventOutcome(
+                event_id=f"E{i}", event_date=base + timedelta(days=i),
+                event_type=EventType.PRESS_CONFERENCE, is_weekend=False,
+                spx_1d_return=ret, strategy_pnl_bps=pnl,
+            )
+            for i, (ret, pnl) in enumerate([
+                (0.01, 100.0), (-0.10, -500.0), (0.02, 100.0)
+            ])
+        ]
+        result = eng._aggregate_results(outcomes, [], 0)
+        assert result.max_event_loss == pytest.approx(-0.10)
+        assert result.max_drawdown == pytest.approx((1.01 * 0.95 / (1.01)) - 1.0)

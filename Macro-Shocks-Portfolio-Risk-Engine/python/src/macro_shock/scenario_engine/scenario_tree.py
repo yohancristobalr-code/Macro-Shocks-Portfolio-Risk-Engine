@@ -3,18 +3,16 @@ scenario_engine/scenario_tree.py
 
 Shock Propagation and Scenario Tree Engine.
 
-Builds a probability-weighted scenario tree for a macro event, conditioned on:
+Builds a scenario-weighted tree for a macro event, conditioned on:
 1. The policy surprise vector (magnitude and direction)
 2. Pre-event market vulnerability (regime, vol level, liquidity)
 3. Event type and timing (weekend gap, emergency, etc.)
 
-Scenarios are calibrated to historical event distributions.
-Each scenario carries explicit impact estimates, a probability, and
-liquidity/trading-halt assumptions.
-
-Uncertainty: scenario probabilities are point estimates, not exact.
-In production, confidence intervals should be communicated alongside
-any single probability estimate.
+Scenario weights are heuristic priors conditioned on surprise and regime.
+They are normalized to sum to one for aggregation, but are NOT empirically
+calibrated probabilities and must not be interpreted as forecast odds.
+Historical calibration, out-of-sample validation, and uncertainty intervals
+are required before probabilistic interpretation.
 """
 
 from __future__ import annotations
@@ -43,8 +41,8 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Scenario Definitions
 # ---------------------------------------------------------------------------
-# Base scenarios. Probabilities are set to 1.0 (placeholder) and are
-# conditioned/re-weighted by the scenario engine based on the context.
+# Base heuristic weights. These are not empirically calibrated probabilities;
+# they are conditioned/re-weighted and normalized for scenario aggregation.
 
 SCENARIO_TEMPLATES = [
     {
@@ -308,7 +306,9 @@ class ScenarioTreeBuilder:
             # Gap estimate is the probability-weighted equity impact
             # adjusted for futures pre-absorption
             monday_gap = expected_equity * 0.85  # Futures absorb ~15% before open
-            monday_gap_conf = float(1.0 - vulnerability.data_quality * 0.2)  # Lower confidence with missing data
+            # Coverage is a conservative confidence proxy, not a calibrated probability.
+            # Missing data must never increase confidence.
+            monday_gap_conf = float(np.clip(vulnerability.data_quality, 0.0, 1.0))
 
         tree = ScenarioTree(
             event_id=event.event_id,

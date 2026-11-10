@@ -430,7 +430,8 @@ class ScenarioOutcome(BaseModel):
 
 
 class ScenarioTree(BaseModel):
-    """Probability-weighted scenario tree for the event."""
+    """Scenario tree; default weights are heuristic and not calibrated probabilities."""
+    probability_method: str = "heuristic_weights_not_calibrated"
     tree_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     event_id: str
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -599,7 +600,8 @@ class BacktestResult(BaseModel):
 
     # Risk metrics
     expected_shortfall_5pct: float = 0.0
-    max_drawdown: float = 0.0
+    max_drawdown: float = 0.0  # Compounded strategy-P&L drawdown, decimal return
+    max_event_loss: float = 0.0  # Worst single-event SPX return, decimal return
     tail_loss_1pct: float = 0.0
     avg_weekend_gap_estimate_error: float = 0.0
 

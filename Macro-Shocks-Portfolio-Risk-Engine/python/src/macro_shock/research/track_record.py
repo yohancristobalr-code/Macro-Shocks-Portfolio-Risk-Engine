@@ -15,29 +15,44 @@ excess returns, so a difference of about the dividend yield is expected.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
 
-COLUMNS = ["run_date", "kind", "target", "due", "value", "low", "high"]
+BASE_COLUMNS = ["run_date", "kind", "target", "due", "value", "low", "high"]
+COLUMNS = BASE_COLUMNS + ["forecast_id", "emitted_at", "methodology_version"]
 
 
 def read(path: Path) -> pd.DataFrame:
     if not Path(path).exists():
         return pd.DataFrame(columns=COLUMNS)
-    return pd.read_csv(path, dtype={"run_date": str, "target": str, "due": str})
+    log = pd.read_csv(path, dtype={"run_date": str, "target": str, "due": str})
+    # Backward-compatible read of legacy logs; existing rows are retained.
+    for column in COLUMNS:
+        if column not in log.columns:
+            log[column] = pd.NA
+    return log[COLUMNS]
 
 
 def record(path: Path, rows: List[Dict[str, object]]) -> pd.DataFrame:
-    """Add today's forecasts, replacing any from an earlier run the same day."""
+    """Append forecast emissions; never overwrite a prior forecast revision."""
     log = read(path)
-    new = pd.DataFrame(rows, columns=COLUMNS)
+    new = pd.DataFrame(rows)
     if len(new):
-        keys = set(zip(new["run_date"], new["kind"], new["target"]))
-        log = log[[k not in keys for k in zip(log["run_date"], log["kind"], log["target"])]]
+        for column in BASE_COLUMNS:
+            if column not in new.columns:
+                new[column] = pd.NA
+        if "forecast_id" not in new.columns:
+            new["forecast_id"] = [str(uuid4()) for _ in range(len(new))]
+        if "emitted_at" not in new.columns:
+            new["emitted_at"] = datetime.now(timezone.utc).isoformat()
+        if "methodology_version" not in new.columns:
+            new["methodology_version"] = "unspecified"
+        new = new[COLUMNS]
         log = pd.concat([log, new], ignore_index=True)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     log[COLUMNS].to_csv(path, index=False)

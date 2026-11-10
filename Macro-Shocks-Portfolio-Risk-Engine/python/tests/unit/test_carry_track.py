@@ -88,13 +88,17 @@ class TestTrackRecord:
         table = pd.DataFrame([{"month": m, "item": "headline", "mm": 0.30, "low": 0.10, "high": 0.50}])
         return SimpleNamespace(months=[m], table=table)
 
-    def test_record_replaces_same_day(self, tmp_path):
+    def test_record_appends_same_day_revisions(self, tmp_path):
         path = tmp_path / "p.csv"
         an = SimpleNamespace(table=pd.DataFrame({"mkt_6m": [2.0, 4.0, 6.0]}))
         tr.record(path, tr.forecasts(date(2026, 3, 2), self.nowcast(), an, SimpleNamespace(forecast=1.5)))
         log = tr.record(path, tr.forecasts(date(2026, 3, 2), self.nowcast(), an, None))
-        assert len(log) == 3 and set(log["kind"]) == {"cpi", "analogs", "model"}
-        assert log[log["kind"] == "analogs"].iloc[0]["value"] == 4.0
+        assert len(log) == 5
+        assert set(log["kind"]) == {"cpi", "analogs", "model"}
+        assert len(log[log["kind"] == "model"]) == 1
+        assert len(log[log["kind"] == "cpi"]) == 2
+        assert log[log["kind"] == "analogs"].iloc[-1]["value"] == 4.0
+        assert log["forecast_id"].is_unique
 
     def test_score(self, tmp_path):
         log = tr.record(tmp_path / "p.csv", tr.forecasts(date(2026, 3, 2), self.nowcast(),

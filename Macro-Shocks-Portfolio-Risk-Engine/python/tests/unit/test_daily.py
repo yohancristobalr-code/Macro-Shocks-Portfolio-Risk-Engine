@@ -77,6 +77,8 @@ def fred_today(vix=16.0):
         "DGS2": flat(4.2), "DGS5": flat(4.3), "DGS10": flat(4.5), "DGS30": flat(4.8),
         "DFII10": flat(2.0), "T10YIE": flat(2.3), "BAMLH0A0HYM2": flat(3.1), "BAMLC0A0CM": flat(0.9),
         "VIXCLS": flat(vix), "SP500": spx, "CBBTCUSD": pd.Series(65000.0, index=days),
+        "STLFSI4": pd.Series(0.0, index=pd.date_range(end=TODAY, periods=1500, freq="W-FRI")),
+        "NFCI": pd.Series(0.0, index=pd.date_range(end=TODAY, periods=1500, freq="W-FRI")),
     }
 
 
@@ -118,7 +120,10 @@ class TestDailyCommand:
         assert "liquidity 1.00" in out and "funding 0.00" in out
 
     def test_components_without_stress_indices(self, monkeypatch, capsys, tmp_path):
-        self._run(monkeypatch, tmp_path, "--quick")
+        data = fred_today()
+        data.pop("STLFSI4")
+        data.pop("NFCI")
+        self._run(monkeypatch, tmp_path, "--quick", data=data)
         out = capsys.readouterr().out
         assert "Components: volatility" in out and "liquidity" not in out
 
