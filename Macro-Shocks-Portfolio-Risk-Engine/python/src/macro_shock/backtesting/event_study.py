@@ -436,13 +436,15 @@ class BacktestEngine:
             if o.predicted_composite_score is not None and o.spx_1d_return is not None
         ]
         scores = [score for score, _ in paired]
-        realized_returns = [ret for _, ret in paired]
+        paired_returns = [ret for _, ret in paired]
+        # Tail-risk metrics use every realized return, even when a prediction is absent.
+        realized_returns = [o.spx_1d_return for o in outcomes if o.spx_1d_return is not None]
         predicted_impacts = [o.predicted_equity_impact for o in outcomes if o.predicted_equity_impact is not None]
 
         # Score accuracy: correlation between each event's score and its own realized severity.
         score_accuracy = 0.0
         if len(paired) > 5:
-            neg_returns = [-ret for _, ret in paired]
+            neg_returns = [-ret for ret in paired_returns]
             if np.std(scores) > 0 and np.std(neg_returns) > 0:
                 score_accuracy = float(np.corrcoef(scores, neg_returns)[0, 1])
 
