@@ -308,7 +308,9 @@ class ScenarioTreeBuilder:
             # Gap estimate is the probability-weighted equity impact
             # adjusted for futures pre-absorption
             monday_gap = expected_equity * 0.85  # Futures absorb ~15% before open
-            monday_gap_conf = float(1.0 - vulnerability.data_quality * 0.2)  # Lower confidence with missing data
+            # Coverage is a conservative confidence proxy, not a calibrated probability.
+            # Missing data must never increase confidence.
+            monday_gap_conf = float(np.clip(vulnerability.data_quality, 0.0, 1.0))
 
         tree = ScenarioTree(
             event_id=event.event_id,
