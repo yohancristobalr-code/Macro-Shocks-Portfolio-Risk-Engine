@@ -183,7 +183,11 @@ class CompositeRiskScorer:
         regime = vulnerability.regime
         weights = REGIME_WEIGHTS.get(regime, REGIME_WEIGHTS[RegimeType.UNKNOWN])
         regime_mult = REGIME_MULTIPLIERS.get(regime, 1.10)
-        gap_mult = self._compute_gap_multiplier(event)
+        # Gap duration/surprise/vulnerability is already represented by gap_ss.
+        # Applying a second global multiplier double-counts the same event-closure risk.
+        # Keep the legacy output field at neutral until a separately validated
+        # incremental gap effect is demonstrated.
+        gap_mult = 1.0
 
         # Compute each sub-score
         liquidity_ss = self._score_liquidity(
