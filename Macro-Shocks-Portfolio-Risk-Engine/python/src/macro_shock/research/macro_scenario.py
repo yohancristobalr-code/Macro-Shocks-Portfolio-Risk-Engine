@@ -184,13 +184,17 @@ def assess(series: Dict[str, pd.Series], window: int = WINDOW) -> MarketScenario
 
 
 def score_history(series: Dict[str, pd.Series], window: int = WINDOW, days: int = 260) -> pd.DataFrame:
-    """Each scenario's score on each of the last ``days`` trading days (scale: the last 3 years' moves)."""
+    """Point-in-time scenario scores; each date is scaled only by prior moves available then."""
     panel = levels(series)
     if panel.empty:
         return pd.DataFrame()
     ch = changes(panel, window)
-    size = ch[ch.index > ch.index[-1] - pd.DateOffset(years=HISTORY_YEARS)].std().replace(0, np.nan)
-    rows = {d: score(ch.loc[d] / size) for d in ch.index[-days:]}
+    rows = {}
+    for d in ch.index[-days:]:
+        history = ch.loc[(ch.index <= d) & (ch.index > d - pd.DateOffset(years=HISTORY_YEARS))]
+        # Require a minimally useful calibration sample; otherwise leave scores unavailable.
+        size = history.std().replace(0, np.nan) if len(history) >= max(20, window + 1) else pd.Series(dtype=float)
+        rows[d] = score(ch.loc[d] / size) if len(size) else pd.Series(dtype=float)
     return pd.DataFrame(rows).T.reindex(columns=list(SCENARIOS))
 
 
